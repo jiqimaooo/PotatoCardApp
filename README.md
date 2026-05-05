@@ -16,7 +16,7 @@ PotatoCardApp 是一款 iOS 应用，致力于为 **墨水屏设备（E-Ink）**
 
 | 首页 | 待办 | 技能 |
 |------|------|------|
-| <img src="images/home.png" width="200"/> | <img src="images/todos.png" width="200"/> | <img src="images/skills.png" width="200"/> |
+| <img src="image/home.png" width="200"/> | <img src="image/todos.png" width="200"/> | <img src="image/skills.png" width="200"/> |
 
 ---
 
