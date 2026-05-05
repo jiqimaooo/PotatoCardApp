@@ -373,11 +373,9 @@ struct SkillsHomeView: View {
     }()
 }
 
-private enum WeatherCredentialKind: String, Identifiable {
+private enum WeatherCredentialKind: String {
     case apiHost
     case apiKey
-
-    var id: String { rawValue }
 
     var title: String {
         switch self {
@@ -396,10 +394,6 @@ private enum WeatherCredentialKind: String, Identifiable {
             return "请输入你的和风天气 API Key"
         }
     }
-
-    var usesSecureInput: Bool {
-        self == .apiKey
-    }
 }
 
 private struct WeatherSkillDetailView: View {
@@ -408,8 +402,8 @@ private struct WeatherSkillDetailView: View {
 
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
-    @State private var editingCredentialKind: WeatherCredentialKind?
-    @State private var editingCredentialText = ""
+    @State private var isAPIHostVisible = false
+    @State private var isAPIKeyVisible = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -425,9 +419,6 @@ private struct WeatherSkillDetailView: View {
         }
         .navigationTitle("天气看板")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $editingCredentialKind) { kind in
-            credentialEditorSheet(for: kind)
-        }
     }
 
     private var previewCard: some View {
@@ -524,8 +515,22 @@ private struct WeatherSkillDetailView: View {
                 .foregroundStyle(secondaryTextColor)
 
             VStack(spacing: 12) {
-                credentialField(kind: .apiHost)
-                credentialField(kind: .apiKey)
+                credentialField(
+                    kind: .apiHost,
+                    text: Binding(
+                        get: { store.config.apiHost },
+                        set: { store.updateAPIHost($0) }
+                    ),
+                    isVisible: $isAPIHostVisible
+                )
+                credentialField(
+                    kind: .apiKey,
+                    text: Binding(
+                        get: { store.config.apiKey },
+                        set: { store.updateAPIKey($0) }
+                    ),
+                    isVisible: $isAPIKeyVisible
+                )
             }
 
             Button {
@@ -585,78 +590,47 @@ private struct WeatherSkillDetailView: View {
         }
     }
 
-    private func credentialField(kind: WeatherCredentialKind) -> some View {
-        let value = credentialValue(for: kind)
-
-        return VStack(alignment: .leading, spacing: 8) {
+    private func credentialField(
+        kind: WeatherCredentialKind,
+        text: Binding<String>,
+        isVisible: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             Text(kind.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(primaryTextColor)
 
-            Button {
-                editingCredentialText = value
-                editingCredentialKind = kind
-            } label: {
-                HStack(spacing: 10) {
-                    Text(maskedCredential(value))
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(value.trimmed.isEmpty ? secondaryTextColor : primaryTextColor)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    Image(systemName: "pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(secondaryTextColor)
+            HStack(spacing: 8) {
+                Group {
+                    if isVisible.wrappedValue {
+                        TextField(kind.placeholder, text: text)
+                    } else {
+                        // 默认隐藏敏感配置，但仍然直接编辑绑定的真实值。
+                        SecureField(kind.placeholder, text: text)
+                    }
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 44)
-                .background(Color.black.opacity(colorScheme == .dark ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(primaryTextColor)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+                Button {
+                    isVisible.wrappedValue.toggle()
+                } label: {
+                    Image(systemName: isVisible.wrappedValue ? "eye.slash" : "eye")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(secondaryTextColor)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isVisible.wrappedValue ? "隐藏\(kind.title)" : "显示\(kind.title)")
             }
-            .buttonStyle(.plain)
+            .padding(.leading, 14)
+            .padding(.trailing, 8)
+            .frame(height: 44)
+            .background(Color.black.opacity(colorScheme == .dark ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-    }
-
-    private func credentialEditorSheet(for kind: WeatherCredentialKind) -> some View {
-        WeatherCredentialEditorView(kind: kind, text: editingCredentialText) { newValue in
-            updateCredential(kind, value: newValue)
-        }
-    }
-
-    private func credentialValue(for kind: WeatherCredentialKind) -> String {
-        switch kind {
-        case .apiHost:
-            return store.config.apiHost
-        case .apiKey:
-            return store.config.apiKey
-        }
-    }
-
-    private func updateCredential(_ kind: WeatherCredentialKind, value: String) {
-        switch kind {
-        case .apiHost:
-            store.updateAPIHost(value)
-        case .apiKey:
-            store.updateAPIKey(value)
-        }
-    }
-
-    private func maskedCredential(_ value: String) -> String {
-        let trimmedValue = value.trimmed
-        guard !trimmedValue.isEmpty else { return "未填写" }
-
-        let characters = Array(trimmedValue)
-        guard characters.count > 4 else {
-            return String(characters.prefix(1)) + "****" + String(characters.suffix(1))
-        }
-
-        let visibleCount = characters.count > 10 ? 4 : 2
-        let prefix = String(characters.prefix(visibleCount))
-        let suffix = String(characters.suffix(visibleCount))
-        let hiddenCount = max(4, min(12, characters.count - visibleCount * 2))
-
-        // 设置页只展示脱敏值，避免 Host 和 Key 在列表中明文暴露。
-        return prefix + String(repeating: "*", count: hiddenCount) + suffix
     }
 
     private func detailNavigationRow<Destination: View>(
@@ -756,57 +730,6 @@ private struct WeatherSkillDetailView: View {
         colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
     }
 
-}
-
-private struct WeatherCredentialEditorView: View {
-    let kind: WeatherCredentialKind
-    let onSave: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var draft: String
-
-    init(kind: WeatherCredentialKind, text: String, onSave: @escaping (String) -> Void) {
-        self.kind = kind
-        self.onSave = onSave
-        _draft = State(initialValue: text)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    if kind.usesSecureInput {
-                        SecureField(kind.placeholder, text: $draft)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    } else {
-                        TextField(kind.placeholder, text: $draft)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
-                } footer: {
-                    Text("保存后设置页会继续以星号脱敏展示。")
-                }
-            }
-            .navigationTitle(kind.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
-                        dismiss()
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        // 只在编辑页处理明文，设置页始终展示脱敏内容。
-                        onSave(draft)
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
 }
 
 private struct WeatherCitySelectionView: View {
