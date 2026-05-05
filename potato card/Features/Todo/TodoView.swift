@@ -15,9 +15,9 @@ struct TodoView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             headerView
-            addTodoView
             transferStatusView
             todoList
+            addTodoView
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onChange(of: bleService.transferPhase) { _, phase in
@@ -91,6 +91,7 @@ struct TodoView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(cardStrokeColor, lineWidth: 1)
         )
+        .padding(.bottom, 16)
     }
 
     @ViewBuilder
@@ -250,7 +251,8 @@ struct TodoView: View {
             image: displayImage,
             targetSize: device.profile.pixelSize,
             fitMode: .centerCrop,
-            profile: device.profile
+            profile: device.profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
         )
 
         pendingDisplayImage = displayImage

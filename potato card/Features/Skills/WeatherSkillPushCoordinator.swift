@@ -58,7 +58,8 @@ final class WeatherSkillPushCoordinator {
             image: displayImage,
             targetSize: targetDeviceSnapshot.profile.pixelSize,
             fitMode: .centerCrop,
-            profile: targetDeviceSnapshot.profile
+            profile: targetDeviceSnapshot.profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
         )
 
         return WeatherPreparedPush(
@@ -104,42 +105,6 @@ final class WeatherSkillPushCoordinator {
         store.updateTargetDevice(device)
         store.markSynced()
         return "已推送到\(device.name)"
-    }
-
-    func startLatestWeatherPush() async throws -> String {
-        let store = WeatherSkillStore()
-        logger.info("开始启动天气推送。技能开关=\(store.config.isEnabled, privacy: .public)")
-
-        guard store.config.isEnabled else {
-            logger.error("天气推送启动终止：天气技能已关闭。")
-            throw WeatherPushError.skillDisabled
-        }
-
-        let targetDeviceSnapshot = try resolveTargetDeviceSnapshot(using: store)
-        logger.info("已解析目标设备：id=\(targetDeviceSnapshot.id, privacy: .public), name=\(targetDeviceSnapshot.name, privacy: .public)")
-
-        await store.refreshWeather()
-        guard let snapshot = store.snapshot else {
-            logger.error("天气推送启动终止：天气刷新失败，loadState=\(store.loadState.message, privacy: .public)")
-            throw WeatherPushError.weatherUnavailable(store.loadState.message)
-        }
-
-        let prepared = preparePush(
-            snapshot: snapshot,
-            configuration: store.config,
-            targetDeviceSnapshot: targetDeviceSnapshot
-        )
-        logger.info("天气图片渲染完成，启动蓝牙推送后立即返回快捷指令。")
-
-        try await bleService.startWeatherImagePush(
-            prepared.transferImage,
-            toTargetDeviceSnapshot: prepared.targetDeviceSnapshot
-        )
-
-        // 非阻塞快捷指令只表示“已开始”，不能提前写入同步成功时间。
-        bleService.markLastTransferredImage(prepared.displayImage, for: targetDeviceSnapshot.id)
-        store.updateTargetDeviceSnapshot(targetDeviceSnapshot)
-        return "已开始推送到\(targetDeviceSnapshot.name)"
     }
 
     private func resolveTargetDeviceSnapshot(using store: WeatherSkillStore) throws -> WeatherTargetDeviceSnapshot {

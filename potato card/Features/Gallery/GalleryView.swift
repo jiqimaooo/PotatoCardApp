@@ -361,7 +361,8 @@ private struct GalleryImageViewer: View {
             targetSize: device.profile.pixelSize,
             fitMode: .centerCrop,
             adjustment: .default,
-            profile: device.profile
+            profile: device.profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
         )
     }
 

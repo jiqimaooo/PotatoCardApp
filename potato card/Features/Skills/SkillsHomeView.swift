@@ -5,7 +5,8 @@ struct SkillsHomeView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var weatherStore = WeatherSkillStore()
-    @State private var syncContext: WeatherSkillSyncContext?
+    @State private var activeSyncContext: WeatherSkillSyncContext?
+    @State private var didHandleActiveSyncSuccess = false
     @State private var showsComingSoon = false
 
     var body: some View {
@@ -29,19 +30,13 @@ struct SkillsHomeView: View {
         .onChange(of: bleService.selectedDevice?.id) { _, _ in
             backfillTargetDeviceSelectionIfNeeded()
         }
+        .onChange(of: bleService.transferPhase) { _, phase in
+            handleTransferPhaseChange(phase)
+        }
         .alert("更多技能即将上线", isPresented: $showsComingSoon) {
             Button("知道了", role: .cancel) {}
         } message: {
             Text("图片、自定义、日历等技能会继续接到这个页面里。")
-        }
-        .fullScreenCover(item: $syncContext) { context in
-            WeatherSkillSyncView(
-                context: context,
-                onSynchronized: {
-                    weatherStore.markSynced()
-                }
-            )
-            .environmentObject(bleService)
         }
     }
 
@@ -132,25 +127,22 @@ struct SkillsHomeView: View {
 
                 HStack(spacing: 8) {
                     Button {
-                        syncContext = makeSyncContext()
+                        startWeatherSync()
                     } label: {
-                        Text("立即同步")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 38)
-                            .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        syncButtonLabel(height: 38, cornerRadius: 11, fontSize: 14)
                     }
                     .buttonStyle(.plain)
-                    .opacity(makeSyncContext() == nil ? 0.45 : 1)
-                    .disabled(makeSyncContext() == nil)
+                    .opacity(!canStartWeatherSync && !isWeatherSyncing ? 0.45 : 1)
+                    .disabled(!canStartWeatherSync || isWeatherSyncing)
 
                     NavigationLink {
                         WeatherSkillDetailView(
                             store: weatherStore,
                             onSyncRequested: {
-                                syncContext = makeSyncContext()
-                            }
+                                startWeatherSync()
+                            },
+                            isSyncing: isWeatherSyncing,
+                            syncProgress: bleService.transferProgress
                         )
                         .environmentObject(bleService)
                     } label: {
@@ -305,6 +297,69 @@ struct SkillsHomeView: View {
         )
     }
 
+    private var isWeatherSyncing: Bool {
+        bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
+    }
+
+    private var canStartWeatherSync: Bool {
+        weatherStore.snapshot != nil && (selectedTargetDevice ?? activeDevice) != nil
+    }
+
+    @ViewBuilder
+    private func syncButtonLabel(height: CGFloat, cornerRadius: CGFloat, fontSize: CGFloat) -> some View {
+        let progress = min(max(bleService.transferProgress, 0), 1)
+        let showsProgress = isWeatherSyncing && progress >= 0.03
+
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(isWeatherSyncing ? accentColor.opacity(0.28) : accentColor)
+
+            if showsProgress {
+                GeometryReader { proxy in
+                    // 传输中复用按钮自身空间做进度条，避免额外弹层打断操作流。
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(accentColor)
+                        .frame(width: min(proxy.size.width, max(height, proxy.size.width * progress)))
+                }
+                .allowsHitTesting(false)
+            }
+
+            Text(isWeatherSyncing ? "同步中 \(Int(progress * 100))%" : "立即同步")
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private func startWeatherSync() {
+        guard !isWeatherSyncing, let context = makeSyncContext() else { return }
+        activeSyncContext = context
+        didHandleActiveSyncSuccess = false
+        bleService.transfer(image: context.transferImage, to: context.device)
+    }
+
+    private func handleTransferPhaseChange(_ phase: TransferPhase) {
+        guard let context = activeSyncContext else { return }
+
+        switch phase {
+        case .succeeded:
+            guard !didHandleActiveSyncSuccess else { return }
+            didHandleActiveSyncSuccess = true
+            bleService.markLastTransferredImage(context.displayImage)
+            weatherStore.markSynced()
+            activeSyncContext = nil
+        case .failed:
+            didHandleActiveSyncSuccess = false
+            activeSyncContext = nil
+        default:
+            break
+        }
+    }
+
     private var selectedTargetDevice: BleDevice? {
         let targetID = weatherStore.config.targetDeviceID.trimmed
         guard !targetID.isEmpty else { return nil }
@@ -399,9 +454,12 @@ private enum WeatherCredentialKind: String {
 private struct WeatherSkillDetailView: View {
     @ObservedObject var store: WeatherSkillStore
     let onSyncRequested: () -> Void
+    let isSyncing: Bool
+    let syncProgress: Double
 
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isAPISectionExpanded = false
     @State private var isAPIHostVisible = false
     @State private var isAPIKeyVisible = false
 
@@ -483,11 +541,6 @@ private struct WeatherSkillDetailView: View {
                 WeatherFrequencyPickerView(store: store)
             }
             dividerRow
-            detailToggleRow(title: "空气质量", isOn: Binding(
-                get: { store.config.showsAirQuality },
-                set: { store.updateShowsAirQuality($0) }
-            ))
-            dividerRow
             detailNavigationRow(title: "显示模板", value: store.config.template.title) {
                 WeatherTemplatePickerView(store: store)
             }
@@ -506,32 +559,72 @@ private struct WeatherSkillDetailView: View {
 
     private var apiSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("和风天气配置")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(primaryTextColor)
+            Button {
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.88)) {
+                    isAPISectionExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Text("和风天气配置")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(primaryTextColor)
 
-            Text("请配置和风天气 API Host 和 API Key，注意数据保护")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(secondaryTextColor)
+                    Spacer()
 
-            VStack(spacing: 12) {
-                credentialField(
-                    kind: .apiHost,
-                    text: Binding(
-                        get: { store.config.apiHost },
-                        set: { store.updateAPIHost($0) }
-                    ),
-                    isVisible: $isAPIHostVisible
-                )
-                credentialField(
-                    kind: .apiKey,
-                    text: Binding(
-                        get: { store.config.apiKey },
-                        set: { store.updateAPIKey($0) }
-                    ),
-                    isVisible: $isAPIKeyVisible
-                )
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(secondaryTextColor)
+                        .rotationEffect(.degrees(isAPISectionExpanded ? 180 : 0))
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+
+            if isAPISectionExpanded {
+                Text("请配置和风天气 API Host 和 API Key，注意数据保护")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+
+                VStack(spacing: 12) {
+                    credentialField(
+                        kind: .apiHost,
+                        text: Binding(
+                            get: { store.config.apiHost },
+                            set: { store.updateAPIHost($0) }
+                        ),
+                        isVisible: $isAPIHostVisible
+                    )
+                    credentialField(
+                        kind: .apiKey,
+                        text: Binding(
+                            get: { store.config.apiKey },
+                            set: { store.updateAPIKey($0) }
+                        ),
+                        isVisible: $isAPIKeyVisible
+                    )
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(18)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+    }
+
+    private var actionsSection: some View {
+        VStack(spacing: 12) {
+            Button {
+                onSyncRequested()
+            } label: {
+                syncButtonLabel
+            }
+            .buttonStyle(.plain)
+            .opacity(previewImage == nil || selectedDevice == nil ? 0.45 : 1)
+            .disabled(previewImage == nil || selectedDevice == nil || isSyncing)
 
             Button {
                 Task {
@@ -544,50 +637,43 @@ private struct WeatherSkillDetailView: View {
                     .frame(height: 42)
             }
             .buttonStyle(.bordered)
+            .disabled(isWeatherRefreshing)
         }
-        .padding(18)
-        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(cardStrokeColor, lineWidth: 1)
-        )
     }
 
-    private var actionsSection: some View {
-        VStack(spacing: 12) {
-            Text("快捷指令“天气推送”会默认推送到这里选中的设备。")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(secondaryTextColor)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var isWeatherRefreshing: Bool {
+        // 刷新中禁用按钮，避免重复触发天气请求。
+        store.loadState == .locating || store.loadState == .loading
+    }
 
-            Button {
-                onSyncRequested()
-            } label: {
-                Text("立即同步")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(red: 0.18, green: 0.49, blue: 0.98))
-            .disabled(previewImage == nil || selectedDevice == nil)
+    private var syncButtonLabel: some View {
+        let progress = min(max(syncProgress, 0), 1)
+        let accentColor = Color(red: 0.18, green: 0.49, blue: 0.98)
+        let showsProgress = isSyncing && progress >= 0.03
 
-            NavigationLink {
-                WeatherAutomationGuideView()
-            } label: {
-                Text("快捷指令说明")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 46)
-                    .background(Color.black.opacity(colorScheme == .dark ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(cardStrokeColor, lineWidth: 1)
-                    )
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSyncing ? accentColor.opacity(0.28) : accentColor)
+
+            if showsProgress {
+                GeometryReader { proxy in
+                    // 详情页也直接在按钮内展示进度，保持按钮尺寸稳定。
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(accentColor)
+                        .frame(width: min(proxy.size.width, max(48, proxy.size.width * progress)))
+                }
+                .allowsHitTesting(false)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(primaryTextColor)
+
+            Text(isSyncing ? "同步中 \(Int(progress * 100))%" : "立即同步")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .monospacedDigit()
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func credentialField(
@@ -886,31 +972,32 @@ private struct WeatherTemplatePickerView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 16) {
-                Button {
-                    store.updateTemplate(.minimalist)
-                } label: {
-                    HStack(spacing: 14) {
-                        templatePreview(.minimalist)
-                            .frame(width: 88, height: 132)
+                ForEach(WeatherDisplayTemplate.allCases) { template in
+                    Button {
+                        store.updateTemplate(template)
+                    } label: {
+                        HStack(spacing: 14) {
+                            templatePreview(template)
+                                .frame(width: 88, height: 132)
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("极简版")
-                                .font(.system(size: 18, weight: .semibold))
-                            Text("强调时间、温度与空气质量。其余模板后续补设计。")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(template.title)
+                                    .font(.system(size: 18, weight: .semibold))
+                            }
+
+                            Spacer()
+
+                            if store.config.template == template {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                            }
                         }
-
-                        Spacer()
-
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                        .padding(14)
+                        .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
-                    .padding(14)
-                    .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.primary)
             }
             .padding(20)
         }
@@ -984,180 +1071,10 @@ private struct WeatherDevicePickerView: View {
     }
 }
 
-private struct WeatherAutomationGuideView: View {
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
-                automationStep(number: "1", title: "先配置天气技能", detail: "确认天气 API 已填写完成，并且“同步到设备”里已经选好目标设备。")
-                automationStep(number: "2", title: "打开快捷指令 App", detail: "搜索“天气推送”或直接搜索 Tatoo!，就能看到这个快捷指令动作。")
-                automationStep(number: "3", title: "添加到自动化", detail: "在个人自动化里加入“天气推送”，可绑定固定时间、到达地点等触发条件。")
-                automationStep(number: "4", title: "首次验证设备在线", detail: "首次建议手动运行一次，确认设备在附近且蓝牙权限、天气配置都正常。")
-            }
-            .padding(20)
-        }
-        .navigationTitle("快捷指令说明")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func automationStep(number: String, title: String, detail: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text(number)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Color(red: 0.18, green: 0.49, blue: 0.98), in: Circle())
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                Text(detail)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct WeatherSkillSyncContext: Identifiable {
-    let id = UUID()
+private struct WeatherSkillSyncContext {
     let displayImage: UIImage
     let transferImage: UIImage
     let device: BleDevice
-}
-
-private struct WeatherSkillSyncView: View {
-    let context: WeatherSkillSyncContext
-    let onSynchronized: () -> Void
-
-    @EnvironmentObject private var bleService: BleTransferService
-    @Environment(\.dismiss) private var dismiss
-    @State private var didTriggerTransfer = false
-    @State private var didHandleSuccess = false
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.white.ignoresSafeArea()
-
-                VStack(spacing: 24) {
-                    Spacer()
-
-                    if bleService.transferPhase == .succeeded {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 92, weight: .medium))
-                            .foregroundStyle(Color(red: 0.20, green: 0.72, blue: 0.34))
-
-                        Text("同步成功")
-                            .font(.system(size: 30, weight: .bold))
-
-                        Text("内容已更新到 \(context.device.name)")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    } else if case .failed = bleService.transferPhase {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 92, weight: .medium))
-                            .foregroundStyle(.red)
-
-                        Text("同步失败")
-                            .font(.system(size: 30, weight: .bold))
-
-                        Text(bleService.errorMessage ?? "设备传输失败，请稍后重试。")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    } else {
-                        ZStack {
-                            Circle()
-                                .stroke(Color.black.opacity(0.08), lineWidth: 12)
-                                .frame(width: 146, height: 146)
-
-                            ProgressView(value: bleService.transferProgress)
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(1.6)
-
-                            Text("\(Int(bleService.transferProgress * 100))%")
-                                .font(.system(size: 30, weight: .semibold))
-                                .monospacedDigit()
-                        }
-
-                        Text("正在同步到墨水屏")
-                            .font(.system(size: 24, weight: .bold))
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            syncStepRow(title: "连接设备", finished: true)
-                            syncStepRow(title: "发送数据", finished: bleService.transferProgress >= 0.35)
-                            syncStepRow(title: "刷新屏幕", finished: bleService.transferPhase == .succeeded)
-                        }
-                        .padding(.horizontal, 32)
-                    }
-
-                    Spacer()
-
-                    if bleService.transferPhase == .succeeded {
-                        Button("完成") {
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color(red: 0.18, green: 0.49, blue: 0.98))
-                    } else if case .failed = bleService.transferPhase {
-                        VStack(spacing: 10) {
-                            Button("重试") {
-                                startTransfer()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color(red: 0.18, green: 0.49, blue: 0.98))
-
-                            Button("取消") {
-                                dismiss()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    } else {
-                        Button("取消") {
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-                .padding(.bottom, 40)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") {
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear {
-                startTransfer()
-            }
-            .onChange(of: bleService.transferPhase) { _, phase in
-                guard phase == .succeeded, !didHandleSuccess else { return }
-                didHandleSuccess = true
-                bleService.markLastTransferredImage(context.displayImage)
-                onSynchronized()
-            }
-        }
-    }
-
-    private func startTransfer() {
-        didHandleSuccess = false
-        didTriggerTransfer = true
-        bleService.transfer(image: context.transferImage, to: context.device)
-    }
-
-    private func syncStepRow(title: String, finished: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: finished ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(finished ? Color(red: 0.18, green: 0.49, blue: 0.98) : Color.gray)
-            Text(title)
-                .font(.system(size: 15, weight: .medium))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
 
 private struct SkillsHomeView_Previews: PreviewProvider {

@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var didBeginInitialAutoScan = false
     @State private var didScheduleTabPrewarm = false
     @State private var bluetoothPulse = false
+    @State private var isDiagnosticsSheetPresented = false
     @State private var transferredPhotoImage: UIImage?
     @AppStorage("transferredAlbum") private var transferredAlbumName = ""
     @AppStorage("transferredPhotoPath") private var transferredPhotoPath = ""
@@ -76,6 +77,12 @@ struct ContentView: View {
         .tint(accentColor)
         .overlay(alignment: .bottom) {
             proximityConnectionCard
+        }
+        .sheet(isPresented: $isDiagnosticsSheetPresented) {
+            DeviceDiagnosticsSheet()
+                .environmentObject(bleService)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .onAppear {
             beginInitialAutoScanIfNeeded()
@@ -242,7 +249,7 @@ struct ContentView: View {
 
                     HStack(spacing: 12) {
                         bluetoothStatusIcon
-                        batteryStatusPill
+                        diagnosticsSettingsButton
                     }
                     .padding(.bottom, 25)
                 }
@@ -392,6 +399,24 @@ struct ContentView: View {
         .onChange(of: isConnecting) { _, newValue in
             bluetoothPulse = newValue
         }
+    }
+
+    private var diagnosticsSettingsButton: some View {
+        Button {
+            isDiagnosticsSheetPresented = true
+        } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(secondaryTextColor)
+                .frame(width: 34, height: 34)
+                .background(statusPillFillColor, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(statusPillStrokeColor, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("设备设置")
     }
 
     private var batteryStatusPill: some View {

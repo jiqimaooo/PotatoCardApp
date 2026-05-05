@@ -47,15 +47,17 @@ enum WeatherUpdateFrequency: String, Codable, CaseIterable, Identifiable {
 
 enum WeatherDisplayTemplate: String, Codable, CaseIterable, Identifiable {
     case minimalist
+    case blueMinimalist
 
     var id: String { rawValue }
 
     var title: String {
-        "极简版"
-    }
-
-    var subtitle: String {
-        "强调时间、温度与空气质量"
+        switch self {
+        case .minimalist:
+            return "白色版"
+        case .blueMinimalist:
+            return "蓝色版"
+        }
     }
 }
 
@@ -173,9 +175,15 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         fixedCityQuery = try container.decodeIfPresent(String.self, forKey: .fixedCityQuery) ?? "深圳"
         fixedLocation = try container.decodeIfPresent(WeatherLocationOption.self, forKey: .fixedLocation)
         latestCoordinate = try container.decodeIfPresent(WeatherCoordinate.self, forKey: .latestCoordinate)
-        showsAirQuality = try container.decodeIfPresent(Bool.self, forKey: .showsAirQuality) ?? true
+        // 空气质量不再提供开关，旧配置即使保存过 false 也统一恢复为展示。
+        showsAirQuality = true
         updateFrequency = try container.decodeIfPresent(WeatherUpdateFrequency.self, forKey: .updateFrequency) ?? .hourly
-        template = try container.decodeIfPresent(WeatherDisplayTemplate.self, forKey: .template) ?? .minimalist
+        if let templateRawValue = try container.decodeIfPresent(String.self, forKey: .template) {
+            // 模板值需要向前兼容，未知模板回退到极简版，避免整份配置读取失败。
+            template = WeatherDisplayTemplate(rawValue: templateRawValue) ?? .minimalist
+        } else {
+            template = .minimalist
+        }
         targetDeviceID = try container.decodeIfPresent(String.self, forKey: .targetDeviceID) ?? ""
         targetDeviceSnapshot = try container.decodeIfPresent(WeatherTargetDeviceSnapshot.self, forKey: .targetDeviceSnapshot)
         lastSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncAt)
@@ -191,7 +199,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         try container.encode(fixedCityQuery, forKey: .fixedCityQuery)
         try container.encodeIfPresent(fixedLocation, forKey: .fixedLocation)
         try container.encodeIfPresent(latestCoordinate, forKey: .latestCoordinate)
-        try container.encode(showsAirQuality, forKey: .showsAirQuality)
+        try container.encode(true, forKey: .showsAirQuality)
         try container.encode(updateFrequency, forKey: .updateFrequency)
         try container.encode(template, forKey: .template)
         try container.encode(targetDeviceID, forKey: .targetDeviceID)

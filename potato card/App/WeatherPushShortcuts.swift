@@ -16,8 +16,8 @@ struct WeatherPushIntent: AppIntent {
         logger.info("天气推送快捷指令开始执行。")
 
         do {
-            // 快捷指令的后台窗口很短，启动 BLE 推送后立即返回，避免系统等待到后台时间耗尽。
-            message = try await WeatherSkillPushCoordinator.shared.startLatestWeatherPush()
+            // 纯后台模式下必须等待 BLE 返回最终结果，避免 Intent 提前结束后传输被系统挂起。
+            message = try await WeatherSkillPushCoordinator.shared.pushLatestWeather()
             logger.info("天气推送快捷指令执行成功：\(message, privacy: .public)")
         } catch {
             // 快捷指令直接抛错时，系统通常只显示“未知错误”，这里改成把真实原因返回给用户。

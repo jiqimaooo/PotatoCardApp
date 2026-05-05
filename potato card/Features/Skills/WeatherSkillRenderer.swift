@@ -39,6 +39,7 @@ enum WeatherSkillRenderer {
     // 调色板保持克制，最终图像还会经过设备侧墨水屏颜色处理。
     private enum Palette {
         static let background = UIColor(red: 0.96, green: 0.95, blue: 0.91, alpha: 1)
+        static let blueBackground = UIColor(red: 0.18, green: 0.49, blue: 0.98, alpha: 1)
         static let outline = UIColor.black
         static let divider = UIColor(white: 0.72, alpha: 1)
         static let cloudFill = UIColor(red: 0.89, green: 0.94, blue: 0.98, alpha: 1)
@@ -57,6 +58,99 @@ enum WeatherSkillRenderer {
         static let aqiRed = UIColor(red: 0.88, green: 0.16, blue: 0.16, alpha: 1)
         static let aqiPurple = UIColor(red: 0.58, green: 0.20, blue: 0.52, alpha: 1)
         static let accentOrange = UIColor(red: 0.93, green: 0.48, blue: 0.10, alpha: 1)
+    }
+
+    private struct RenderStyle {
+        let background: UIColor
+        let foreground: UIColor
+        let divider: UIColor
+        let cloudFill: UIColor
+        let cloudMuted: UIColor
+        let sunFill: UIColor
+        let sunRay: UIColor
+        let moonFill: UIColor
+        let rain: UIColor
+        let snow: UIColor
+        let fog: UIColor
+        let wind: UIColor
+        let thunder: UIColor
+        let accentText: UIColor
+
+        private init(
+            background: UIColor,
+            foreground: UIColor,
+            divider: UIColor,
+            cloudFill: UIColor,
+            cloudMuted: UIColor,
+            sunFill: UIColor,
+            sunRay: UIColor,
+            moonFill: UIColor,
+            rain: UIColor,
+            snow: UIColor,
+            fog: UIColor,
+            wind: UIColor,
+            thunder: UIColor,
+            accentText: UIColor
+        ) {
+            self.background = background
+            self.foreground = foreground
+            self.divider = divider
+            self.cloudFill = cloudFill
+            self.cloudMuted = cloudMuted
+            self.sunFill = sunFill
+            self.sunRay = sunRay
+            self.moonFill = moonFill
+            self.rain = rain
+            self.snow = snow
+            self.fog = fog
+            self.wind = wind
+            self.thunder = thunder
+            self.accentText = accentText
+        }
+
+        static let minimalist = RenderStyle(
+            background: Palette.background,
+            foreground: Palette.outline,
+            divider: Palette.divider,
+            cloudFill: Palette.cloudFill,
+            cloudMuted: Palette.cloudMuted,
+            sunFill: Palette.sunFill,
+            sunRay: Palette.sunRay,
+            moonFill: Palette.moonFill,
+            rain: Palette.rain,
+            snow: Palette.snow,
+            fog: Palette.fog,
+            wind: Palette.wind,
+            thunder: Palette.thunder,
+            accentText: Palette.accentOrange
+        )
+
+        // 蓝色模板只换配色，固定布局继续复用极简版。
+        static let blueMinimalist = RenderStyle(
+            background: Palette.blueBackground,
+            foreground: UIColor.white,
+            divider: UIColor.white.withAlphaComponent(0.62),
+            cloudFill: UIColor.white.withAlphaComponent(0.22),
+            cloudMuted: UIColor.white.withAlphaComponent(0.16),
+            sunFill: UIColor.white,
+            sunRay: UIColor.white.withAlphaComponent(0.78),
+            moonFill: UIColor.white.withAlphaComponent(0.90),
+            rain: UIColor.white,
+            snow: UIColor.white,
+            fog: UIColor.white.withAlphaComponent(0.76),
+            wind: UIColor.white.withAlphaComponent(0.82),
+            thunder: UIColor.white,
+            accentText: UIColor.white
+        )
+
+        init(template: WeatherDisplayTemplate) {
+            switch template {
+            case .minimalist:
+                self = .minimalist
+            case .blueMinimalist:
+                self = .blueMinimalist
+            }
+        }
     }
 
     // MARK: - 天气图标类型
@@ -103,15 +197,16 @@ enum WeatherSkillRenderer {
         rendererFormat.scale = 1
         rendererFormat.opaque = true
 
+        let style = RenderStyle(template: template)
         let renderer = UIGraphicsImageRenderer(size: Layout.canvasSize, format: rendererFormat)
         return renderer.image { context in
             let bounds = CGRect(origin: .zero, size: Layout.canvasSize)
-            Palette.background.setFill()
+            style.background.setFill()
             context.fill(bounds)
 
             switch template {
-            case .minimalist:
-                drawMinimalist(snapshot: snapshot, in: context.cgContext)
+            case .minimalist, .blueMinimalist:
+                drawMinimalist(snapshot: snapshot, in: context.cgContext, style: style)
             }
         }
     }
@@ -119,29 +214,29 @@ enum WeatherSkillRenderer {
     // MARK: - 屏幕分区
 
     // 按固定纵向结构绘制：顶部 -> 主天气 -> 四小时预报 -> AQI。
-    private static func drawMinimalist(snapshot: WeatherSkillSnapshot, in context: CGContext) {
-        drawHeader(snapshot: snapshot, in: context)
-        drawHero(snapshot: snapshot, in: context)
-        drawHourlyRow(snapshot: snapshot, in: context)
-        drawAirQuality(snapshot: snapshot, in: context)
+    private static func drawMinimalist(snapshot: WeatherSkillSnapshot, in context: CGContext, style: RenderStyle) {
+        drawHeader(snapshot: snapshot, in: context, style: style)
+        drawHero(snapshot: snapshot, in: context, style: style)
+        drawHourlyRow(snapshot: snapshot, in: context, style: style)
+        drawAirQuality(snapshot: snapshot, in: context, style: style)
     }
 
     // 顶部区域：标题和紧凑的城市日期信息。
-    private static func drawHeader(snapshot: WeatherSkillSnapshot, in context: CGContext) {
+    private static func drawHeader(snapshot: WeatherSkillSnapshot, in context: CGContext, style: RenderStyle) {
         drawText(
             "今日天气",
             font: .systemFont(ofSize: 42, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: Layout.timeRect.minX, y: Layout.timeRect.minY + 20, width: 190, height: 52),
             alignment: .left
         )
 
         let info = Layout.headerInfoRect
-        drawLocationPin(in: CGRect(x: info.minX + 2, y: info.minY + 2, width: 16, height: 20))
+        drawLocationPin(in: CGRect(x: info.minX + 2, y: info.minY + 2, width: 16, height: 20), style: style)
         drawText(
             snapshot.location.name,
             font: .systemFont(ofSize: 24, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: info.minX + 22, y: info.minY, width: 88, height: 28),
             alignment: .right
         )
@@ -149,21 +244,21 @@ enum WeatherSkillRenderer {
         drawText(
             shortDate(snapshot.updatedAt),
             font: .monospacedDigitSystemFont(ofSize: 18, weight: .medium),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: info.minX + 4, y: info.minY + 32, width: 54, height: 20),
             alignment: .left
         )
         drawText(
             weekdayText(snapshot.updatedAt),
             font: .systemFont(ofSize: 18, weight: .medium),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: info.minX + 60, y: info.minY + 32, width: 50, height: 20),
             alignment: .right
         )
         drawText(
             "更新 \(shortTime(snapshot.updatedAt))",
             font: .systemFont(ofSize: 15, weight: .medium),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: info.minX + 4, y: info.minY + 58, width: 106, height: 20),
             alignment: .left
         )
@@ -171,64 +266,65 @@ enum WeatherSkillRenderer {
         drawLine(
             from: CGPoint(x: Layout.outerMargin, y: Layout.topDividerY),
             to: CGPoint(x: Layout.canvasSize.width - Layout.outerMargin, y: Layout.topDividerY),
-            color: Palette.divider,
+            color: style.divider,
             width: 1
         )
     }
 
     // 主天气区域：天气图标和温度是主要视觉重心。
-    private static func drawHero(snapshot: WeatherSkillSnapshot, in context: CGContext) {
+    private static func drawHero(snapshot: WeatherSkillSnapshot, in context: CGContext, style: RenderStyle) {
         let mainArtwork = weatherArtwork(for: snapshot.current.iconCode, fallbackText: snapshot.current.conditionText)
         if !drawQWeatherIcon(
             iconCode: snapshot.current.iconCode,
             in: Layout.heroIconRect,
             fontSize: 140,
-            useFillStyle: true
+            useFillStyle: true,
+            style: style
         ) {
-            drawWeatherArtwork(mainArtwork, in: Layout.heroIconRect, lineWidth: 5.5, isCompact: false)
+            drawWeatherArtwork(mainArtwork, in: Layout.heroIconRect, lineWidth: 5.5, isCompact: false, style: style)
         }
 
         drawText(
             "\(snapshot.current.temperature)",
             font: .systemFont(ofSize: temperatureFontSize(snapshot.current.temperature), weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: Layout.temperatureRect,
             alignment: .left
         )
         drawText(
             "°C",
             font: .systemFont(ofSize: 30, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: Layout.unitRect,
             alignment: .left
         )
         drawText(
             snapshot.current.conditionText,
             font: .systemFont(ofSize: 34, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: Layout.conditionRect,
             alignment: .left
         )
         drawAttributedText(
-            feelsLikeText(snapshot.current.feelsLike),
+            feelsLikeText(snapshot.current.feelsLike, style: style),
             rect: Layout.feelsRect
         )
-        drawWeatherMetrics(snapshot.current, in: Layout.weatherMetricsRect)
+        drawWeatherMetrics(snapshot.current, in: Layout.weatherMetricsRect, style: style)
 
         drawLine(
             from: CGPoint(x: Layout.outerMargin, y: Layout.middleDividerY),
             to: CGPoint(x: Layout.canvasSize.width - Layout.outerMargin, y: Layout.middleDividerY),
-            color: Palette.divider,
+            color: style.divider,
             width: 1
         )
     }
 
     // 预报区域始终是等宽四列。绘制前会规范化时间，避免接口返回重复时间。
-    private static func drawHourlyRow(snapshot: WeatherSkillSnapshot, in context: CGContext) {
+    private static func drawHourlyRow(snapshot: WeatherSkillSnapshot, in context: CGContext, style: RenderStyle) {
         drawText(
             "未来几小时天气",
             font: .systemFont(ofSize: 22, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: Layout.hourlyTitleRect,
             alignment: .left
         )
@@ -247,7 +343,7 @@ enum WeatherSkillRenderer {
                 drawLine(
                     from: CGPoint(x: columnRect.minX, y: columnRect.minY + 2),
                     to: CGPoint(x: columnRect.minX, y: columnRect.maxY - 4),
-                    color: Palette.divider,
+                    color: style.divider,
                     width: 1
                 )
             }
@@ -255,7 +351,7 @@ enum WeatherSkillRenderer {
             drawText(
                 shortTime(item.date, timeZoneID: snapshot.location.timezone),
                 font: .monospacedDigitSystemFont(ofSize: 18, weight: .medium),
-                color: Palette.outline,
+                color: style.foreground,
                 rect: CGRect(x: columnRect.minX, y: columnRect.minY, width: columnRect.width, height: 24),
                 alignment: .center
             )
@@ -265,20 +361,22 @@ enum WeatherSkillRenderer {
                 iconCode: item.iconCode,
                 in: iconRect,
                 fontSize: 38,
-                useFillStyle: true
+                useFillStyle: true,
+                style: style
             ) {
                 drawWeatherArtwork(
                     weatherArtwork(for: item.iconCode, fallbackText: item.conditionText),
                     in: iconRect,
                     lineWidth: 3,
-                    isCompact: true
+                    isCompact: true,
+                    style: style
                 )
             }
 
             drawText(
                 "\(item.temperature)°C",
                 font: .systemFont(ofSize: 24, weight: .bold),
-                color: Palette.outline,
+                color: style.foreground,
                 rect: CGRect(x: columnRect.minX, y: columnRect.minY + 58, width: columnRect.width, height: 28),
                 alignment: .center
             )
@@ -286,10 +384,10 @@ enum WeatherSkillRenderer {
     }
 
     // 底部 AQI 模块。左侧数字使用更高的绘制区域，避免字形和墨水屏栅格化后被裁掉。
-    private static func drawAirQuality(snapshot: WeatherSkillSnapshot, in context: CGContext) {
+    private static func drawAirQuality(snapshot: WeatherSkillSnapshot, in context: CGContext, style: RenderStyle) {
         let rect = Layout.airQualityRect
         let modulePath = UIBezierPath(roundedRect: rect, cornerRadius: 8)
-        Palette.background.setFill()
+        style.background.setFill()
         modulePath.fill()
         Palette.aqiGreen.setStroke()
         modulePath.lineWidth = 1
@@ -298,7 +396,7 @@ enum WeatherSkillRenderer {
         drawText(
             "AQI",
             font: .systemFont(ofSize: 22, weight: .bold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: rect.minX + 14, y: rect.minY + 12, width: 78, height: 26),
             alignment: .left,
             lineHeight: 26
@@ -308,7 +406,7 @@ enum WeatherSkillRenderer {
             drawText(
                 "未开启",
                 font: .systemFont(ofSize: 22, weight: .semibold),
-                color: Palette.fog,
+                color: style.fog,
                 rect: CGRect(x: rect.minX + 14, y: rect.minY + 54, width: 120, height: 28),
                 alignment: .left
             )
@@ -327,7 +425,7 @@ enum WeatherSkillRenderer {
         drawLine(
             from: CGPoint(x: rect.minX + 126, y: rect.minY + 16),
             to: CGPoint(x: rect.minX + 126, y: rect.maxY - 16),
-            color: Palette.divider,
+            color: style.divider,
             width: 1
         )
 
@@ -345,14 +443,14 @@ enum WeatherSkillRenderer {
 
         let barRect = CGRect(x: rect.minX + 142, y: rect.minY + 60, width: 218, height: 8)
         drawAQIBar(in: barRect)
-        drawAQIPointer(value: Int(airQuality.aqiText) ?? 0, in: barRect)
-        drawAQIScale(in: barRect, rightEdge: rect.maxX - 4)
+        drawAQIPointer(value: Int(airQuality.aqiText) ?? 0, in: barRect, style: style)
+        drawAQIScale(in: barRect, rightEdge: rect.maxX - 4, style: style)
 
         let summary = airQualitySummaryText(airQuality)
         drawText(
             summary,
             font: .systemFont(ofSize: 15, weight: .semibold),
-            color: Palette.outline,
+            color: style.foreground,
             rect: CGRect(x: rect.minX + 142, y: rect.minY + 88, width: 226, height: 18),
             alignment: .left
         )
@@ -361,7 +459,7 @@ enum WeatherSkillRenderer {
     // MARK: - AQI 绘制
 
     // 体感下方的三项天气参数，使用固定三列避免文字把主视觉挤乱。
-    private static func drawWeatherMetrics(_ current: WeatherSkillSnapshot.CurrentWeather, in rect: CGRect) {
+    private static func drawWeatherMetrics(_ current: WeatherSkillSnapshot.CurrentWeather, in rect: CGRect, style: RenderStyle) {
         let columnWidth = rect.width / 3
         let items: [(WeatherMetricIcon, String)] = [
             (.up, current.tempMax.map { "\($0)°" } ?? "--"),
@@ -376,11 +474,11 @@ enum WeatherSkillRenderer {
                 width: columnWidth,
                 height: rect.height
             )
-            drawWeatherMetricIcon(item.0, in: CGRect(x: itemRect.minX, y: itemRect.minY + 2, width: 11, height: 13))
+            drawWeatherMetricIcon(item.0, in: CGRect(x: itemRect.minX, y: itemRect.minY + 2, width: 11, height: 13), style: style)
             drawText(
                 item.1,
                 font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
-                color: Palette.outline,
+                color: style.foreground,
                 rect: CGRect(x: itemRect.minX + 14, y: itemRect.minY, width: itemRect.width - 14, height: itemRect.height),
                 alignment: .left
             )
@@ -412,7 +510,7 @@ enum WeatherSkillRenderer {
     }
 
     // 绘制 AQI 色带上方的小三角。数值会限制在 0...300，避免指针跑出模块。
-    private static func drawAQIPointer(value: Int, in rect: CGRect) {
+    private static func drawAQIPointer(value: Int, in rect: CGRect, style: RenderStyle) {
         let clampedValue = max(0, min(300, value))
         let ratio = CGFloat(clampedValue) / 300
         let centerX = rect.minX + ratio * rect.width
@@ -421,12 +519,12 @@ enum WeatherSkillRenderer {
         pointer.addLine(to: CGPoint(x: centerX - 6, y: rect.minY - 16))
         pointer.addLine(to: CGPoint(x: centerX + 6, y: rect.minY - 16))
         pointer.close()
-        Palette.outline.setFill()
+        style.foreground.setFill()
         pointer.fill()
     }
 
     // 色带下方的刻度。字号刻意偏小，避免底部模块贴到屏幕边缘。
-    private static func drawAQIScale(in rect: CGRect, rightEdge: CGFloat) {
+    private static func drawAQIScale(in rect: CGRect, rightEdge: CGFloat, style: RenderStyle) {
         let labels = ["0", "50", "100", "150", "200", "300+"]
         let positions: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
@@ -444,7 +542,7 @@ enum WeatherSkillRenderer {
             drawText(
                 label,
                 font: .monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                color: Palette.outline,
+                color: style.foreground,
                 rect: labelRect,
                 alignment: index == labels.count - 1 ? .right : .center
             )
@@ -452,18 +550,18 @@ enum WeatherSkillRenderer {
     }
 
     // 小参数图标用简单路径绘制，避免混入系统符号的线条风格。
-    private static func drawWeatherMetricIcon(_ icon: WeatherMetricIcon, in rect: CGRect) {
+    private static func drawWeatherMetricIcon(_ icon: WeatherMetricIcon, in rect: CGRect, style: RenderStyle) {
         switch icon {
         case .up:
-            drawArrow(in: rect, pointsUp: true)
+            drawArrow(in: rect, pointsUp: true, style: style)
         case .down:
-            drawArrow(in: rect, pointsUp: false)
+            drawArrow(in: rect, pointsUp: false, style: style)
         case .drop:
-            drawWaterDrop(in: rect)
+            drawWaterDrop(in: rect, style: style)
         }
     }
 
-    private static func drawArrow(in rect: CGRect, pointsUp: Bool) {
+    private static func drawArrow(in rect: CGRect, pointsUp: Bool, style: RenderStyle) {
         let path = UIBezierPath()
         if pointsUp {
             path.move(to: CGPoint(x: rect.midX, y: rect.minY))
@@ -483,11 +581,11 @@ enum WeatherSkillRenderer {
             path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - rect.height * 0.48))
         }
         path.close()
-        Palette.outline.setFill()
+        style.foreground.setFill()
         path.fill()
     }
 
-    private static func drawWaterDrop(in rect: CGRect) {
+    private static func drawWaterDrop(in rect: CGRect, style: RenderStyle) {
         let path = UIBezierPath()
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))
         path.addCurve(
@@ -511,7 +609,7 @@ enum WeatherSkillRenderer {
             controlPoint2: CGPoint(x: rect.minX + rect.width * 0.10, y: rect.minY + rect.height * 0.24)
         )
         path.close()
-        Palette.rain.setFill()
+        style.rain.setFill()
         path.fill()
     }
 
@@ -596,7 +694,8 @@ enum WeatherSkillRenderer {
         iconCode: String,
         in rect: CGRect,
         fontSize: CGFloat,
-        useFillStyle: Bool
+        useFillStyle: Bool,
+        style: RenderStyle
     ) -> Bool {
         guard
             let glyph = qWeatherIconGlyph(for: iconCode, useFillStyle: useFillStyle),
@@ -607,7 +706,7 @@ enum WeatherSkillRenderer {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: Palette.outline
+            .foregroundColor: style.foreground
         ]
         let size = NSString(string: glyph).size(withAttributes: attributes)
         let drawPoint = CGPoint(
@@ -715,29 +814,30 @@ enum WeatherSkillRenderer {
         _ artwork: WeatherArtwork,
         in rect: CGRect,
         lineWidth: CGFloat,
-        isCompact: Bool
+        isCompact: Bool,
+        style: RenderStyle
     ) {
         switch artwork {
         case .clearDay:
-            drawSun(in: rect, lineWidth: lineWidth)
+            drawSun(in: rect, lineWidth: lineWidth, style: style)
         case .partlyCloudyDay:
-            drawPartlyCloudy(in: rect, lineWidth: lineWidth, night: false, compact: isCompact)
+            drawPartlyCloudy(in: rect, lineWidth: lineWidth, night: false, compact: isCompact, style: style)
         case .cloudy:
-            drawCloud(in: rect, lineWidth: lineWidth, fillColor: Palette.cloudFill)
+            drawCloud(in: rect, lineWidth: lineWidth, fillColor: style.cloudFill, style: style)
         case .rain:
-            drawRain(in: rect, lineWidth: lineWidth, heavy: false)
+            drawRain(in: rect, lineWidth: lineWidth, heavy: false, style: style)
         case .thunderRain:
-            drawThunderRain(in: rect, lineWidth: lineWidth)
+            drawThunderRain(in: rect, lineWidth: lineWidth, style: style)
         case .snow:
-            drawSnow(in: rect, lineWidth: lineWidth)
+            drawSnow(in: rect, lineWidth: lineWidth, style: style)
         case .fog:
-            drawFog(in: rect, lineWidth: lineWidth)
+            drawFog(in: rect, lineWidth: lineWidth, style: style)
         case .wind:
-            drawWind(in: rect, lineWidth: lineWidth)
+            drawWind(in: rect, lineWidth: lineWidth, style: style)
         case .clearNight:
-            drawNightClear(in: rect, lineWidth: lineWidth)
+            drawNightClear(in: rect, lineWidth: lineWidth, style: style)
         case .partlyCloudyNight:
-            drawPartlyCloudy(in: rect, lineWidth: lineWidth, night: true, compact: isCompact)
+            drawPartlyCloudy(in: rect, lineWidth: lineWidth, night: true, compact: isCompact, style: style)
         }
     }
 
@@ -745,7 +845,7 @@ enum WeatherSkillRenderer {
 
     // 下面的图标使用 UIKit 路径绘制，不再用 SF Symbols。
     // 这样主图标和小时图标可以保持同一套视觉语言。
-    private static func drawSun(in rect: CGRect, lineWidth: CGFloat) {
+    private static func drawSun(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
         let inset = rect.width * 0.18
         let coreRect = rect.insetBy(dx: inset, dy: inset)
         let rayLength = rect.width * 0.14
@@ -761,16 +861,16 @@ enum WeatherSkillRenderer {
                 x: center.x + cos(angle) * (coreRect.width / 2 + 6 + rayLength),
                 y: center.y + sin(angle) * (coreRect.height / 2 + 6 + rayLength)
             )
-            drawLine(from: start, to: end, color: Palette.sunRay, width: max(3, lineWidth * 0.75), lineCap: .round)
+            drawLine(from: start, to: end, color: style.sunRay, width: max(3, lineWidth * 0.75), lineCap: .round)
         }
 
         let circle = UIBezierPath(ovalIn: coreRect)
-        Palette.sunFill.setFill()
+        style.sunFill.setFill()
         circle.fill()
     }
 
     // 绘制设计稿里的核心“太阳 + 云”组合，小号小时图标也复用这套形状。
-    private static func drawPartlyCloudy(in rect: CGRect, lineWidth: CGFloat, night: Bool, compact: Bool) {
+    private static func drawPartlyCloudy(in rect: CGRect, lineWidth: CGFloat, night: Bool, compact: Bool, style: RenderStyle) {
         let celestialRect = CGRect(
             x: rect.minX + rect.width * 0.22,
             y: rect.minY + rect.height * 0.08,
@@ -779,9 +879,9 @@ enum WeatherSkillRenderer {
         )
 
         if night {
-            drawMoon(in: celestialRect, lineWidth: lineWidth)
+            drawMoon(in: celestialRect, lineWidth: lineWidth, style: style)
         } else {
-            drawSun(in: celestialRect, lineWidth: lineWidth)
+            drawSun(in: celestialRect, lineWidth: lineWidth, style: style)
         }
 
         let cloudRect = CGRect(
@@ -790,13 +890,13 @@ enum WeatherSkillRenderer {
             width: rect.width * 0.82,
             height: rect.height * 0.48
         )
-        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: Palette.cloudFill)
+        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: style.cloudFill, style: style)
     }
 
     // 雨、雷、雪、雾、风都基于同一个云朵底形，保证不同天气的线条重量一致。
-    private static func drawRain(in rect: CGRect, lineWidth: CGFloat, heavy: Bool) {
+    private static func drawRain(in rect: CGRect, lineWidth: CGFloat, heavy: Bool, style: RenderStyle) {
         let cloudRect = CGRect(x: rect.minX + rect.width * 0.10, y: rect.minY + rect.height * 0.12, width: rect.width * 0.78, height: rect.height * 0.44)
-        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: Palette.cloudFill)
+        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: style.cloudFill, style: style)
 
         let dropCount = heavy ? 4 : 3
         let startX = rect.minX + rect.width * 0.28
@@ -806,15 +906,15 @@ enum WeatherSkillRenderer {
             drawLine(
                 from: CGPoint(x: x, y: y),
                 to: CGPoint(x: x - rect.width * 0.03, y: y + rect.height * 0.10),
-                color: Palette.rain,
+                color: style.rain,
                 width: max(3, lineWidth * 0.55),
                 lineCap: .round
             )
         }
     }
 
-    private static func drawThunderRain(in rect: CGRect, lineWidth: CGFloat) {
-        drawRain(in: rect, lineWidth: lineWidth, heavy: true)
+    private static func drawThunderRain(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
+        drawRain(in: rect, lineWidth: lineWidth, heavy: true, style: style)
         let bolt = UIBezierPath()
         bolt.move(to: CGPoint(x: rect.midX + 6, y: rect.minY + rect.height * 0.52))
         bolt.addLine(to: CGPoint(x: rect.midX - 6, y: rect.minY + rect.height * 0.72))
@@ -823,26 +923,26 @@ enum WeatherSkillRenderer {
         bolt.addLine(to: CGPoint(x: rect.midX + 18, y: rect.minY + rect.height * 0.66))
         bolt.addLine(to: CGPoint(x: rect.midX + 8, y: rect.minY + rect.height * 0.66))
         bolt.close()
-        Palette.thunder.setFill()
+        style.thunder.setFill()
         bolt.fill()
     }
 
-    private static func drawSnow(in rect: CGRect, lineWidth: CGFloat) {
+    private static func drawSnow(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
         let cloudRect = CGRect(x: rect.minX + rect.width * 0.10, y: rect.minY + rect.height * 0.12, width: rect.width * 0.78, height: rect.height * 0.44)
-        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: Palette.cloudFill)
+        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: style.cloudFill, style: style)
 
         for index in 0..<3 {
             let center = CGPoint(
                 x: rect.minX + rect.width * (0.30 + CGFloat(index) * 0.16),
                 y: rect.minY + rect.height * 0.74
             )
-            drawSnowflake(center: center, size: rect.width * 0.07, lineWidth: max(2.5, lineWidth * 0.42))
+            drawSnowflake(center: center, size: rect.width * 0.07, lineWidth: max(2.5, lineWidth * 0.42), style: style)
         }
     }
 
-    private static func drawFog(in rect: CGRect, lineWidth: CGFloat) {
+    private static func drawFog(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
         let cloudRect = CGRect(x: rect.minX + rect.width * 0.10, y: rect.minY + rect.height * 0.10, width: rect.width * 0.78, height: rect.height * 0.40)
-        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: Palette.cloudMuted)
+        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: style.cloudMuted, style: style)
 
         for row in 0..<3 {
             let y = rect.minY + rect.height * (0.62 + CGFloat(row) * 0.10)
@@ -855,14 +955,14 @@ enum WeatherSkillRenderer {
             )
             path.lineWidth = max(3, lineWidth * 0.52)
             path.lineCapStyle = .round
-            Palette.fog.setStroke()
+            style.fog.setStroke()
             path.stroke()
         }
     }
 
-    private static func drawWind(in rect: CGRect, lineWidth: CGFloat) {
+    private static func drawWind(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
         let cloudRect = CGRect(x: rect.minX + rect.width * 0.08, y: rect.minY + rect.height * 0.14, width: rect.width * 0.62, height: rect.height * 0.38)
-        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: Palette.cloudMuted)
+        drawCloud(in: cloudRect, lineWidth: lineWidth, fillColor: style.cloudMuted, style: style)
 
         for row in 0..<2 {
             let y = rect.minY + rect.height * (0.58 + CGFloat(row) * 0.12)
@@ -875,38 +975,38 @@ enum WeatherSkillRenderer {
             )
             path.lineWidth = max(3, lineWidth * 0.5)
             path.lineCapStyle = .round
-            Palette.wind.setStroke()
+            style.wind.setStroke()
             path.stroke()
         }
     }
 
-    private static func drawNightClear(in rect: CGRect, lineWidth: CGFloat) {
-        drawMoon(in: CGRect(x: rect.minX + rect.width * 0.20, y: rect.minY + rect.height * 0.18, width: rect.width * 0.52, height: rect.height * 0.52), lineWidth: lineWidth)
-        drawStar(center: CGPoint(x: rect.minX + rect.width * 0.70, y: rect.minY + rect.height * 0.24), size: rect.width * 0.06)
-        drawStar(center: CGPoint(x: rect.minX + rect.width * 0.80, y: rect.minY + rect.height * 0.40), size: rect.width * 0.05)
+    private static func drawNightClear(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
+        drawMoon(in: CGRect(x: rect.minX + rect.width * 0.20, y: rect.minY + rect.height * 0.18, width: rect.width * 0.52, height: rect.height * 0.52), lineWidth: lineWidth, style: style)
+        drawStar(center: CGPoint(x: rect.minX + rect.width * 0.70, y: rect.minY + rect.height * 0.24), size: rect.width * 0.06, style: style)
+        drawStar(center: CGPoint(x: rect.minX + rect.width * 0.80, y: rect.minY + rect.height * 0.40), size: rect.width * 0.05, style: style)
     }
 
-    private static func drawMoon(in rect: CGRect, lineWidth: CGFloat) {
+    private static func drawMoon(in rect: CGRect, lineWidth: CGFloat, style: RenderStyle) {
         let circle = UIBezierPath(ovalIn: rect)
-        Palette.moonFill.setFill()
+        style.moonFill.setFill()
         circle.fill()
 
         let cutRect = rect.offsetBy(dx: rect.width * 0.26, dy: rect.height * 0.02)
         let cutPath = UIBezierPath(ovalIn: cutRect)
-        Palette.background.setFill()
+        style.background.setFill()
         cutPath.fill()
 
         let strokePath = UIBezierPath(ovalIn: rect)
-        Palette.outline.setStroke()
+        style.foreground.setStroke()
         strokePath.lineWidth = max(3, lineWidth * 0.65)
         strokePath.stroke()
     }
 
-    private static func drawCloud(in rect: CGRect, lineWidth: CGFloat, fillColor: UIColor) {
+    private static func drawCloud(in rect: CGRect, lineWidth: CGFloat, fillColor: UIColor, style: RenderStyle) {
         let path = cloudPath(in: rect)
         fillColor.setFill()
         path.fill()
-        Palette.outline.setStroke()
+        style.foreground.setStroke()
         path.lineWidth = lineWidth
         path.lineJoinStyle = .round
         path.lineCapStyle = .round
@@ -938,42 +1038,42 @@ enum WeatherSkillRenderer {
         return path
     }
 
-    private static func drawSnowflake(center: CGPoint, size: CGFloat, lineWidth: CGFloat) {
+    private static func drawSnowflake(center: CGPoint, size: CGFloat, lineWidth: CGFloat, style: RenderStyle) {
         for angle in stride(from: 0.0, to: Double.pi, by: Double.pi / 3) {
             let dx = cos(angle) * size
             let dy = sin(angle) * size
             drawLine(
                 from: CGPoint(x: center.x - dx, y: center.y - dy),
                 to: CGPoint(x: center.x + dx, y: center.y + dy),
-                color: Palette.snow,
+                color: style.snow,
                 width: lineWidth,
                 lineCap: .round
             )
         }
     }
 
-    private static func drawStar(center: CGPoint, size: CGFloat) {
+    private static func drawStar(center: CGPoint, size: CGFloat, style: RenderStyle) {
         drawLine(
             from: CGPoint(x: center.x - size, y: center.y),
             to: CGPoint(x: center.x + size, y: center.y),
-            color: Palette.thunder,
+            color: style.thunder,
             width: 2,
             lineCap: .round
         )
         drawLine(
             from: CGPoint(x: center.x, y: center.y - size),
             to: CGPoint(x: center.x, y: center.y + size),
-            color: Palette.thunder,
+            color: style.thunder,
             width: 2,
             lineCap: .round
         )
     }
 
-    private static func drawLocationPin(in rect: CGRect) {
+    private static func drawLocationPin(in rect: CGRect, style: RenderStyle) {
         guard let image = UIImage(
             systemName: "location.fill",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .bold)
-        )?.withTintColor(Palette.outline, renderingMode: .alwaysOriginal) else {
+        )?.withTintColor(style.foreground, renderingMode: .alwaysOriginal) else {
             return
         }
         image.draw(in: rect)
@@ -1124,7 +1224,7 @@ enum WeatherSkillRenderer {
     }
 
     // 生成“体感 13°C”这种混色文字。
-    private static func feelsLikeText(_ feelsLike: Int) -> NSAttributedString {
+    private static func feelsLikeText(_ feelsLike: Int, style: RenderStyle) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .left
         paragraphStyle.lineBreakMode = .byClipping
@@ -1133,7 +1233,7 @@ enum WeatherSkillRenderer {
             string: "体感 ",
             attributes: [
                 .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                .foregroundColor: Palette.outline,
+                .foregroundColor: style.foreground,
                 .paragraphStyle: paragraphStyle
             ]
         )
@@ -1142,7 +1242,7 @@ enum WeatherSkillRenderer {
                 string: "\(feelsLike)°C",
                 attributes: [
                     .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                    .foregroundColor: Palette.accentOrange,
+                    .foregroundColor: style.accentText,
                     .paragraphStyle: paragraphStyle
                 ]
             )

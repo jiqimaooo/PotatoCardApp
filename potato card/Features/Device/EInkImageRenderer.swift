@@ -24,6 +24,46 @@ struct EInkManualAdjustment: Equatable {
     static let `default` = EInkManualAdjustment()
 }
 
+enum EInkDitherAlgorithm: String, CaseIterable, Identifiable, Codable {
+    case floydSteinberg
+    case atkinson
+    case sierraLite
+    case bayer8x8
+    case nearestColor
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .floydSteinberg:
+            return "Floyd-Steinberg"
+        case .atkinson:
+            return "Atkinson"
+        case .sierraLite:
+            return "Sierra Lite"
+        case .bayer8x8:
+            return "Bayer 8x8"
+        case .nearestColor:
+            return "Nearest Color"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .floydSteinberg:
+            return "当前默认，细节最多"
+        case .atkinson:
+            return "更柔和，适合人像"
+        case .sierraLite:
+            return "噪点较少，速度轻快"
+        case .bayer8x8:
+            return "规则网格，适合插画文字"
+        case .nearestColor:
+            return "不抖动，直接映射 6 色"
+        }
+    }
+}
+
 enum EInkImageRenderer {
     static func render(
         image: UIImage,
@@ -56,7 +96,8 @@ enum EInkImageRenderer {
         targetSize: CGSize,
         fitMode: EInkImageFitMode,
         adjustment: EInkManualAdjustment = .default,
-        profile: EInkDeviceProfile
+        profile: EInkDeviceProfile,
+        ditherAlgorithm: EInkDitherAlgorithm = .floydSteinberg
     ) -> UIImage {
         let fittedImage = render(
             image: image,
@@ -68,7 +109,7 @@ enum EInkImageRenderer {
 
         switch profile.colorMode {
         case .sixColor:
-            return ditherSixColor(rotatedImage)
+            return renderSixColor(rotatedImage, algorithm: ditherAlgorithm)
         case .monochrome, .blackWhiteRed, .blackWhiteRedYellow:
             return rotatedImage
         }
@@ -99,34 +140,92 @@ enum EInkImageRenderer {
         return CGRect(origin: origin, size: finalSize)
     }
 
-    private static func ditherSixColor(_ image: UIImage) -> UIImage {
+    private static func renderSixColor(_ image: UIImage, algorithm: EInkDitherAlgorithm) -> UIImage {
         guard let cgImage = image.cgImage else { return image }
 
         let width = cgImage.width
         let height = cgImage.height
         guard width > 0, height > 0 else { return image }
 
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
-        var pixels = [UInt8](repeating: 255, count: height * bytesPerRow)
+        guard let context = SixColorBitmapContext(cgImage: cgImage, width: width, height: height) else {
+            return image
+        }
 
-        pixels.withUnsafeMutableBytes { buffer in
-            guard let baseAddress = buffer.baseAddress else { return }
-            let context = CGContext(
-                data: baseAddress,
+        switch algorithm {
+        case .nearestColor:
+            applyNearestColor(to: &context.pixels, width: width, height: height)
+        case .bayer8x8:
+            applyBayer8x8(to: &context.pixels, width: width, height: height)
+        case .floydSteinberg:
+            applyErrorDiffusion(to: &context.pixels, width: width, height: height, kernel: EInkDiffusionKernel.floydSteinberg)
+        case .atkinson:
+            applyErrorDiffusion(to: &context.pixels, width: width, height: height, kernel: EInkDiffusionKernel.atkinson)
+        case .sierraLite:
+            applyErrorDiffusion(to: &context.pixels, width: width, height: height, kernel: EInkDiffusionKernel.sierraLite)
+        }
+
+        guard let provider = CGDataProvider(data: Data(context.pixels) as CFData),
+              let output = CGImage(
                 width: width,
                 height: height,
                 bitsPerComponent: 8,
-                bytesPerRow: bytesPerRow,
-                space: colorSpace,
-                bitmapInfo: bitmapInfo
-            )
-            context?.interpolationQuality = .none
-            context?.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+                bitsPerPixel: 32,
+                bytesPerRow: context.bytesPerRow,
+                space: context.colorSpace,
+                bitmapInfo: CGBitmapInfo(rawValue: context.bitmapInfo),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+              )
+        else {
+            return image
         }
 
+        return UIImage(cgImage: output, scale: 1, orientation: .up)
+    }
+
+    private static func applyNearestColor(to pixels: inout [UInt8], width: Int, height: Int) {
+        let palette = EInkSixColorPalette.colors
+        for pixelIndex in 0..<(width * height) {
+            let sourceIndex = pixelIndex * 4
+            let current = EInkDitherColor(
+                red: Double(pixels[sourceIndex]),
+                green: Double(pixels[sourceIndex + 1]),
+                blue: Double(pixels[sourceIndex + 2])
+            )
+            let replacement = nearestPaletteColor(to: current, in: palette)
+            write(replacement, to: &pixels, pixelIndex: pixelIndex)
+        }
+    }
+
+    private static func applyBayer8x8(to pixels: inout [UInt8], width: Int, height: Int) {
+        let palette = EInkSixColorPalette.colors
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let pixelIndex = y * width + x
+                let sourceIndex = pixelIndex * 4
+                let threshold = (Double(EInkBayerMatrix.eightByEight[y % 8][x % 8]) + 0.5) / 64.0 - 0.5
+                let offset = threshold * 72.0
+                let current = EInkDitherColor(
+                    red: (Double(pixels[sourceIndex]) + offset).clampedToByteRange,
+                    green: (Double(pixels[sourceIndex + 1]) + offset).clampedToByteRange,
+                    blue: (Double(pixels[sourceIndex + 2]) + offset).clampedToByteRange
+                )
+                let replacement = nearestPaletteColor(to: current, in: palette)
+                write(replacement, to: &pixels, pixelIndex: pixelIndex)
+            }
+        }
+    }
+
+    private static func applyErrorDiffusion(
+        to pixels: inout [UInt8],
+        width: Int,
+        height: Int,
+        kernel: [EInkDiffusionStep]
+    ) {
+        let bytesPerPixel = 4
         var working = [Double](repeating: 0, count: width * height * 3)
         for pixelIndex in 0..<(width * height) {
             let sourceIndex = pixelIndex * bytesPerPixel
@@ -159,32 +258,27 @@ enum EInkImageRenderer {
                 pixels[pixelIndex * bytesPerPixel + 2] = UInt8(replacement.blue.rounded())
                 pixels[pixelIndex * bytesPerPixel + 3] = 255
 
-                diffuse(error, x: x + 1, y: y, width: width, height: height, factor: 7.0 / 16.0, pixels: &working)
-                diffuse(error, x: x - 1, y: y + 1, width: width, height: height, factor: 3.0 / 16.0, pixels: &working)
-                diffuse(error, x: x, y: y + 1, width: width, height: height, factor: 5.0 / 16.0, pixels: &working)
-                diffuse(error, x: x + 1, y: y + 1, width: width, height: height, factor: 1.0 / 16.0, pixels: &working)
+                for step in kernel {
+                    diffuse(
+                        error,
+                        x: x + step.x,
+                        y: y + step.y,
+                        width: width,
+                        height: height,
+                        factor: step.factor,
+                        pixels: &working
+                    )
+                }
             }
         }
+    }
 
-        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
-              let output = CGImage(
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bitsPerPixel: 32,
-                bytesPerRow: bytesPerRow,
-                space: colorSpace,
-                bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo),
-                provider: provider,
-                decode: nil,
-                shouldInterpolate: false,
-                intent: .defaultIntent
-              )
-        else {
-            return image
-        }
-
-        return UIImage(cgImage: output, scale: 1, orientation: .up)
+    private static func write(_ color: EInkDitherColor, to pixels: inout [UInt8], pixelIndex: Int) {
+        let index = pixelIndex * 4
+        pixels[index] = UInt8(color.red.rounded())
+        pixels[index + 1] = UInt8(color.green.rounded())
+        pixels[index + 2] = UInt8(color.blue.rounded())
+        pixels[index + 3] = 255
     }
 
     private static func nearestPaletteColor(to color: EInkDitherColor, in palette: [EInkDitherColor]) -> EInkDitherColor {
@@ -222,6 +316,85 @@ private struct EInkDitherColor {
     let red: Double
     let green: Double
     let blue: Double
+}
+
+private struct EInkDiffusionStep {
+    let x: Int
+    let y: Int
+    let factor: Double
+}
+
+private enum EInkDiffusionKernel {
+    static let floydSteinberg = [
+        EInkDiffusionStep(x: 1, y: 0, factor: 7.0 / 16.0),
+        EInkDiffusionStep(x: -1, y: 1, factor: 3.0 / 16.0),
+        EInkDiffusionStep(x: 0, y: 1, factor: 5.0 / 16.0),
+        EInkDiffusionStep(x: 1, y: 1, factor: 1.0 / 16.0)
+    ]
+
+    static let atkinson = [
+        EInkDiffusionStep(x: 1, y: 0, factor: 1.0 / 8.0),
+        EInkDiffusionStep(x: 2, y: 0, factor: 1.0 / 8.0),
+        EInkDiffusionStep(x: -1, y: 1, factor: 1.0 / 8.0),
+        EInkDiffusionStep(x: 0, y: 1, factor: 1.0 / 8.0),
+        EInkDiffusionStep(x: 1, y: 1, factor: 1.0 / 8.0),
+        EInkDiffusionStep(x: 0, y: 2, factor: 1.0 / 8.0)
+    ]
+
+    static let sierraLite = [
+        EInkDiffusionStep(x: 1, y: 0, factor: 2.0 / 4.0),
+        EInkDiffusionStep(x: -1, y: 1, factor: 1.0 / 4.0),
+        EInkDiffusionStep(x: 0, y: 1, factor: 1.0 / 4.0)
+    ]
+}
+
+private enum EInkBayerMatrix {
+    static let eightByEight = [
+        [0, 48, 12, 60, 3, 51, 15, 63],
+        [32, 16, 44, 28, 35, 19, 47, 31],
+        [8, 56, 4, 52, 11, 59, 7, 55],
+        [40, 24, 36, 20, 43, 27, 39, 23],
+        [2, 50, 14, 62, 1, 49, 13, 61],
+        [34, 18, 46, 30, 33, 17, 45, 29],
+        [10, 58, 6, 54, 9, 57, 5, 53],
+        [42, 26, 38, 22, 41, 25, 37, 21]
+    ]
+}
+
+private final class SixColorBitmapContext {
+    let width: Int
+    let height: Int
+    let bytesPerRow: Int
+    let colorSpace: CGColorSpace
+    let bitmapInfo: UInt32
+    var pixels: [UInt8]
+
+    init?(cgImage: CGImage, width: Int, height: Int) {
+        self.width = width
+        self.height = height
+        self.bytesPerRow = width * 4
+        self.colorSpace = CGColorSpaceCreateDeviceRGB()
+        self.bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        self.pixels = [UInt8](repeating: 255, count: height * bytesPerRow)
+
+        let didDraw = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return false }
+            let context = CGContext(
+                data: baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+            context?.interpolationQuality = .none
+            context?.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return context != nil
+        }
+
+        guard didDraw else { return nil }
+    }
 }
 
 private enum EInkSixColorPalette {

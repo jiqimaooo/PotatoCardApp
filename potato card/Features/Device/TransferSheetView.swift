@@ -144,7 +144,8 @@ struct TransferSheetView: View {
             targetSize: profile.pixelSize,
             fitMode: .manual,
             adjustment: adjustment,
-            profile: profile
+            profile: profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
         )
     }
 

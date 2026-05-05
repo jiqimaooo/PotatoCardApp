@@ -71,11 +71,6 @@ final class WeatherSkillStore: ObservableObject {
         persistConfiguration()
     }
 
-    func updateShowsAirQuality(_ showsAirQuality: Bool) {
-        config.showsAirQuality = showsAirQuality
-        persistConfiguration()
-    }
-
     func updateFrequency(_ frequency: WeatherUpdateFrequency) {
         config.updateFrequency = frequency
         persistConfiguration()
@@ -155,7 +150,7 @@ final class WeatherSkillStore: ObservableObject {
             loadState = .loading
             snapshot = try await service.fetchWeatherSnapshot(
                 for: resolvedLocation,
-                includesAirQuality: config.showsAirQuality,
+                includesAirQuality: true,
                 credentials: credentials
             )
             loadState = .loaded
