@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+__MACOSX/
+
+# Xcode 用户个人配置
+xcuserdata/
+*.xcuserstate
+
+# 本地总结/私密文件
+SESSION_SUMMARY.md
+
+# 构建产物
+DerivedData/
+build/
+*.ipa
+*.dSYM
+
+# 证书/配置/密钥
+*.p12
+*.mobileprovision
+.env
+
+# 专辑照片（本地保留，不上传）
+potato\ card/Resources/Assets.xcassets/jay_chou_album_covers_png/
+potato\ card/Resources/Assets.xcassets/stefanie_sun_album_covers_png/
