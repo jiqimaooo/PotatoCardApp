@@ -2,18 +2,24 @@ import SwiftUI
 import UIKit
 
 struct SkillsHomeView: View {
+    let onAlbumTransferToDevice: (String) -> Void
+
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var weatherStore = WeatherSkillStore()
     @State private var activeSyncContext: WeatherSkillSyncContext?
     @State private var didHandleActiveSyncSuccess = false
-    @State private var showsComingSoon = false
+
+    init(onAlbumTransferToDevice: @escaping (String) -> Void = { _ in }) {
+        self.onAlbumTransferToDevice = onAlbumTransferToDevice
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 weatherSkillCard
+                albumSkillCard
                 upcomingSkillCard
             }
             .padding(.horizontal, 18)
@@ -33,42 +39,19 @@ struct SkillsHomeView: View {
         .onChange(of: bleService.transferPhase) { _, phase in
             handleTransferPhaseChange(phase)
         }
-        .alert("更多技能即将上线", isPresented: $showsComingSoon) {
-            Button("知道了", role: .cancel) {}
-        } message: {
-            Text("图片、自定义、日历等技能会继续接到这个页面里。")
-        }
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("技能")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(primaryTextColor)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("技能")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(primaryTextColor)
 
-                Text("管理你的技能")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(secondaryTextColor)
-            }
-
-            Spacer()
-
-            Button {
-                showsComingSoon = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(primaryTextColor)
-                    .frame(width: 32, height: 32)
-                    .background(buttonFillColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(cardStrokeColor, lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
+            Text("管理你的技能")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(secondaryTextColor)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var weatherSkillCard: some View {
@@ -171,6 +154,87 @@ struct SkillsHomeView: View {
                 .stroke(cardStrokeColor, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
+        .frame(height: skillCardHeight)
+    }
+
+    private var albumSkillCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.96, green: 0.31, blue: 0.45),
+                                    Color(red: 0.38, green: 0.20, blue: 0.86)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 42, height: 42)
+                        .overlay(
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(.white)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("专辑")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(primaryTextColor)
+
+                        Text("把喜欢的专辑封面推到土豆片")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+
+                Text("\(AlbumCatalog.allAlbums.count) 张封面 · 周杰伦 / 孙燕姿")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(primaryTextColor.opacity(0.78))
+                    .lineLimit(1)
+
+                Text(activeDevice == nil ? "连接设备后可直接传输专辑封面" : "当前设备：\(activeDevice?.name ?? "已连接")")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    NavigationLink {
+                        AlbumSkillDetailView(onTransferToDevice: onAlbumTransferToDevice)
+                            .environmentObject(bleService)
+                    } label: {
+                        Text("打开")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    // 保留和天气卡片右侧设置按钮一致的占位宽度，避免“打开”按钮变长。
+                    Color.clear
+                        .frame(width: 84, height: 38)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            albumPreview
+                .frame(width: 88, height: 132)
+        }
+        .padding(14)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
+        .frame(height: skillCardHeight)
     }
 
     private var upcomingSkillCard: some View {
@@ -231,6 +295,45 @@ struct SkillsHomeView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(secondaryTextColor)
                 }
+            }
+        }
+    }
+
+    private var albumPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.10) : Color.white)
+                .shadow(color: Color.black.opacity(0.035), radius: 6, x: 0, y: 3)
+
+            // 专辑模块复用设备屏幕比例，用封面叠层表达“封面推送”。
+            ZStack {
+                ForEach(Array(AlbumCatalog.featuredAlbums.enumerated()), id: \.offset) { index, album in
+                    Image(album)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 50, height: 50)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(Color.white.opacity(0.82), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(0.14), radius: 5, x: 0, y: 3)
+                        .rotationEffect(.degrees(albumPreviewRotations[index]))
+                        .offset(x: albumPreviewOffsets[index].width, y: albumPreviewOffsets[index].height)
+                }
+            }
+            .frame(width: 78, height: 118)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 8, weight: .bold))
+                    Text("ALBUM")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.46))
+                .padding(.bottom, 8)
             }
         }
     }
@@ -339,7 +442,13 @@ struct SkillsHomeView: View {
         guard !isWeatherSyncing, let context = makeSyncContext() else { return }
         activeSyncContext = context
         didHandleActiveSyncSuccess = false
-        bleService.transfer(image: context.transferImage, to: context.device)
+        // 前台“立即同步”也要显式透传天气模块自己的算法，不能回落到全局算法。
+        bleService.transfer(
+            image: context.transferImage,
+            displayImage: context.displayImage,
+            to: context.device,
+            algorithm: weatherStore.config.imageAlgorithm
+        )
     }
 
     private func handleTransferPhaseChange(_ phase: TransferPhase) {
@@ -400,6 +509,22 @@ struct SkillsHomeView: View {
         colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.04)
     }
 
+    private var skillCardHeight: CGFloat {
+        160
+    }
+
+    private var albumPreviewRotations: [Double] {
+        [-9, 5, 12]
+    }
+
+    private var albumPreviewOffsets: [CGSize] {
+        [
+            CGSize(width: -14, height: -24),
+            CGSize(width: 12, height: -4),
+            CGSize(width: 0, height: 24)
+        ]
+    }
+
     // 旧版本可能只在蓝牙服务里保留了当前设备，没有真正写进天气技能配置，这里顺手补齐一次。
     private func backfillTargetDeviceSelectionIfNeeded() {
         let targetID = weatherStore.config.targetDeviceID.trimmed
@@ -426,6 +551,27 @@ struct SkillsHomeView: View {
         formatter.dateFormat = "M/d HH:mm"
         return formatter
     }()
+}
+
+private struct AlbumSkillDetailView: View {
+    let onTransferToDevice: (String) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            pageBackgroundColor
+                .ignoresSafeArea()
+
+            AlbumView(onTransferToDevice: onTransferToDevice)
+                .padding(.horizontal, 24)
+                .padding(.top, 22)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var pageBackgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color(red: 0.98, green: 0.98, blue: 0.98)
+    }
 }
 
 private enum WeatherCredentialKind: String {
@@ -543,6 +689,10 @@ private struct WeatherSkillDetailView: View {
             dividerRow
             detailNavigationRow(title: "显示模板", value: store.config.template.title) {
                 WeatherTemplatePickerView(store: store)
+            }
+            dividerRow
+            detailNavigationRow(title: "图像算法", value: store.config.imageAlgorithm.title) {
+                WeatherImageAlgorithmPickerView(store: store)
             }
             dividerRow
             detailNavigationRow(title: "同步到设备", value: selectedDeviceLabel) {
@@ -1027,6 +1177,48 @@ private struct WeatherTemplatePickerView: View {
                         .foregroundStyle(.secondary)
                 )
         }
+    }
+}
+
+private struct WeatherImageAlgorithmPickerView: View {
+    @ObservedObject var store: WeatherSkillStore
+
+    var body: some View {
+        List {
+            Section {
+                Text("默认 Bayer 8x8，效果更好，此处仅对天气模块生效")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                ForEach(EInkDitherAlgorithm.allCases) { algorithm in
+                    Button {
+                        store.updateImageAlgorithm(algorithm)
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(algorithm.title)
+                                Text(algorithm.subtitle)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            if store.config.imageAlgorithm == algorithm {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                }
+            }
+        }
+        .navigationTitle("图像算法")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

@@ -12,7 +12,6 @@ struct ContentView: View {
     private enum Tab: Hashable {
         case home
         case gallery
-        case album
         case todo
         case skills
     }
@@ -49,14 +48,6 @@ struct ContentView: View {
                     Label("图库", systemImage: "photo.on.rectangle")
                 }
                 .tag(Tab.gallery)
-
-            tabContent(.album) {
-                albumTab
-            }
-                .tabItem {
-                    Label("专辑", systemImage: "music.note.list")
-                }
-                .tag(Tab.album)
 
             tabContent(.todo) {
                 todoTab
@@ -154,24 +145,6 @@ struct ContentView: View {
         }
     }
 
-    private var albumTab: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                backgroundColor
-                    .ignoresSafeArea()
-
-                AlbumView { album in
-                    transferredAlbumName = album
-                    transferredPhotoPath = ""
-                    selectedTab = .home
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
-            }
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-
     private var todoTab: some View {
         NavigationStack {
             ZStack(alignment: .top) {
@@ -179,8 +152,6 @@ struct ContentView: View {
                     .ignoresSafeArea()
 
                 TodoView()
-                    .padding(.horizontal, 24)
-                    .padding(.top, 22)
             }
             .toolbar(.hidden, for: .navigationBar)
         }
@@ -192,7 +163,11 @@ struct ContentView: View {
                 backgroundColor
                     .ignoresSafeArea()
 
-                SkillsHomeView()
+                SkillsHomeView { album in
+                    transferredAlbumName = album
+                    transferredPhotoPath = ""
+                    selectedTab = .home
+                }
                     .padding(.top, 0)
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -500,9 +475,6 @@ struct ContentView: View {
             // 分批加载不触发定位/网络的页面，避免用户第一次切换时集中解码资源。
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             loadedTabs.insert(.gallery)
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            loadedTabs.insert(.album)
 
             try? await Task.sleep(nanoseconds: 500_000_000)
             loadedTabs.insert(.todo)

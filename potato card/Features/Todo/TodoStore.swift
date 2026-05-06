@@ -22,7 +22,7 @@ final class TodoStore: ObservableObject {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
 
-        items.insert(TodoItem(title: trimmedTitle), at: 0)
+        items.append(TodoItem(title: trimmedTitle))
     }
 
     func update(_ item: TodoItem, title: String) {
@@ -49,6 +49,10 @@ final class TodoStore: ObservableObject {
         for index in offsets.sorted(by: >) where items.indices.contains(index) {
             items.remove(at: index)
         }
+    }
+
+    func clearAll() {
+        items.removeAll()
     }
 
     func move(from source: IndexSet, to destination: Int) {

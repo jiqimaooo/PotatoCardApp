@@ -10,12 +10,13 @@ struct BleDevice: Identifiable, Hashable {
     let batteryPercent: Int?
 
     init(rawDevice: [AnyHashable: Any]) {
-        self.rawDevice = rawDevice
+        let sanitizedRawDevice = BleDevice.sanitizedRawDevice(rawDevice)
+        self.rawDevice = sanitizedRawDevice
 
-        let rawName = rawDevice["name"] as? String
-        let rawMac = rawDevice["mac"] as? String
-        let rawMacAddress = rawDevice["macAddress"] as? String
-        let rawAddress = rawDevice["address"] as? String
+        let rawName = sanitizedRawDevice["name"] as? String
+        let rawMac = sanitizedRawDevice["mac"] as? String
+        let rawMacAddress = sanitizedRawDevice["macAddress"] as? String
+        let rawAddress = sanitizedRawDevice["address"] as? String
 
         // SDK 回调里常用 `macAddress` 保存设备编号，必须和 `mac` 一起纳入识别。
         let normalizedName = BleDevice.normalizedString(rawName)
@@ -29,7 +30,7 @@ struct BleDevice: Identifiable, Hashable {
         // 设备型号表依赖 NEMR 编号，蓝牙名是 PICKSMART 时也要优先用编号匹配。
         let profileLookupName = normalizedMacAddress ?? normalizedMac ?? normalizedName ?? self.name
         self.profile = EInkDeviceProfile.profile(for: profileLookupName)
-        self.batteryPercent = BleDevice.parseBatteryPercent(from: rawDevice)
+        self.batteryPercent = BleDevice.parseBatteryPercent(from: sanitizedRawDevice)
     }
 
     static func == (lhs: BleDevice, rhs: BleDevice) -> Bool {
@@ -72,6 +73,39 @@ struct BleDevice: Identifiable, Hashable {
         }
 
         return nil
+    }
+
+    private static func sanitizedRawDevice(_ rawDevice: [AnyHashable: Any]) -> [AnyHashable: Any] {
+        var sanitizedDevice: [AnyHashable: Any] = [:]
+
+        for (key, value) in rawDevice {
+            guard let sanitizedValue = sanitizedObjectiveCValue(value) else { continue }
+            sanitizedDevice[key] = sanitizedValue
+        }
+
+        return sanitizedDevice
+    }
+
+    private static func sanitizedObjectiveCValue(_ value: Any) -> Any? {
+        let mirror = Mirror(reflecting: value)
+
+        // SDK 回调有时会把 Optional 包装值塞进 Swift 字典；传回 Objective-C 前必须解包。
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else { return nil }
+            return sanitizedObjectiveCValue(child.value)
+        }
+
+        guard !(value is NSNull) else { return nil }
+
+        if let dictionary = value as? [AnyHashable: Any] {
+            return sanitizedRawDevice(dictionary)
+        }
+
+        if let array = value as? [Any] {
+            return array.compactMap { sanitizedObjectiveCValue($0) }
+        }
+
+        return value
     }
 
     // 统一清洗字符串，避免 Optional 包装值或空串参与设备识别。

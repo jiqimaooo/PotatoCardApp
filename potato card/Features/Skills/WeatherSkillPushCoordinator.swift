@@ -59,7 +59,8 @@ final class WeatherSkillPushCoordinator {
             targetSize: targetDeviceSnapshot.profile.pixelSize,
             fitMode: .centerCrop,
             profile: targetDeviceSnapshot.profile,
-            ditherAlgorithm: bleService.ditherAlgorithm
+            // 天气模块优先使用自己的图像算法，不跟随全局传输算法。
+            ditherAlgorithm: configuration.imageAlgorithm
         )
 
         return WeatherPreparedPush(
@@ -97,11 +98,13 @@ final class WeatherSkillPushCoordinator {
 
         let device = try await bleService.pushWeatherImage(
             prepared.transferImage,
-            toTargetDeviceSnapshot: prepared.targetDeviceSnapshot
+            displayImage: prepared.displayImage,
+            toTargetDeviceSnapshot: prepared.targetDeviceSnapshot,
+            algorithm: store.config.imageAlgorithm
         )
         logger.info("蓝牙推送成功：\(device.name, privacy: .public)")
 
-        bleService.markLastTransferredImage(prepared.displayImage)
+        bleService.markLastTransferredImage(prepared.displayImage, for: device.id)
         store.updateTargetDevice(device)
         store.markSynced()
         return "已推送到\(device.name)"

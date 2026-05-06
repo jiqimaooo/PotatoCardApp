@@ -6,12 +6,8 @@
 import SwiftUI
 import UIKit
 
-struct AlbumView: View {
-    let onTransferToDevice: (String) -> Void
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var selectedAlbum: SelectedAlbumGroup?
-
-    private let jayAlbums: [String] = [
+enum AlbumCatalog {
+    static let jayAlbums: [String] = [
         "范特西",
         "八度空間",
         "葉惠美",
@@ -27,7 +23,7 @@ struct AlbumView: View {
         "最伟大的作品"
     ]
 
-    private let stefanieAlbums: [String] = [
+    static let stefanieAlbums: [String] = [
         "孙燕姿",
         "我要的幸福",
         "风筝",
@@ -43,14 +39,28 @@ struct AlbumView: View {
         "Leave"
     ]
 
+    static var allAlbums: [String] {
+        jayAlbums + stefanieAlbums
+    }
+
+    static var featuredAlbums: [String] {
+        ["范特西", "七里香", "孙燕姿"]
+    }
+}
+
+struct AlbumView: View {
+    let onTransferToDevice: (String) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedAlbum: SelectedAlbumGroup?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("专辑")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .foregroundStyle(primaryTextColor)
 
-            artistSection(title: "周杰伦", albums: jayAlbums)
-            artistSection(title: "孙燕姿", albums: stefanieAlbums)
+            artistSection(title: "周杰伦", albums: AlbumCatalog.jayAlbums)
+            artistSection(title: "孙燕姿", albums: AlbumCatalog.stefanieAlbums)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(item: $selectedAlbum) { group in
@@ -264,7 +274,7 @@ private struct AlbumImageViewer: View {
         let displayImage = defaultDisplayImage(from: image, device: device)
         pendingTransferAlbum = albums[selectedIndex]
         pendingTransferImage = displayImage
-        bleService.transfer(image: transferImage, to: device)
+        bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
 
     private func openManualAdjustment() {

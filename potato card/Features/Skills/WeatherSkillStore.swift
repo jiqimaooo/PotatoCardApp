@@ -81,6 +81,11 @@ final class WeatherSkillStore: ObservableObject {
         persistConfiguration()
     }
 
+    func updateImageAlgorithm(_ algorithm: EInkDitherAlgorithm) {
+        config.imageAlgorithm = algorithm
+        persistConfiguration()
+    }
+
     func updateTargetDeviceID(_ deviceID: String) {
         config.targetDeviceID = deviceID
         if config.targetDeviceSnapshot?.id != deviceID {

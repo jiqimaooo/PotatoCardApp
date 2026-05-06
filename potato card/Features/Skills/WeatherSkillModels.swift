@@ -143,6 +143,8 @@ struct WeatherSkillConfiguration: Codable, Equatable {
     var showsAirQuality = true
     var updateFrequency: WeatherUpdateFrequency = .hourly
     var template: WeatherDisplayTemplate = .minimalist
+    // 天气看板允许单独覆盖全局图像算法，默认推荐 Bayer 8x8。
+    var imageAlgorithm: EInkDitherAlgorithm = .bayer8x8
     var targetDeviceID = ""
     var targetDeviceSnapshot: WeatherTargetDeviceSnapshot?
     var lastSyncAt: Date?
@@ -158,6 +160,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         case showsAirQuality
         case updateFrequency
         case template
+        case imageAlgorithm
         case targetDeviceID
         case targetDeviceSnapshot
         case lastSyncAt
@@ -184,6 +187,8 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         } else {
             template = .minimalist
         }
+        // 旧配置没有这个字段时回退到 Bayer 8x8，保证升级后行为稳定。
+        imageAlgorithm = try container.decodeIfPresent(EInkDitherAlgorithm.self, forKey: .imageAlgorithm) ?? .bayer8x8
         targetDeviceID = try container.decodeIfPresent(String.self, forKey: .targetDeviceID) ?? ""
         targetDeviceSnapshot = try container.decodeIfPresent(WeatherTargetDeviceSnapshot.self, forKey: .targetDeviceSnapshot)
         lastSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncAt)
@@ -202,6 +207,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         try container.encode(true, forKey: .showsAirQuality)
         try container.encode(updateFrequency, forKey: .updateFrequency)
         try container.encode(template, forKey: .template)
+        try container.encode(imageAlgorithm, forKey: .imageAlgorithm)
         try container.encode(targetDeviceID, forKey: .targetDeviceID)
         try container.encodeIfPresent(targetDeviceSnapshot, forKey: .targetDeviceSnapshot)
         try container.encodeIfPresent(lastSyncAt, forKey: .lastSyncAt)

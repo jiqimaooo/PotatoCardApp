@@ -135,9 +135,15 @@ struct DeviceDiagnosticsSheet: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(primaryTextColor)
 
-                        Text(bleService.ditherAlgorithm.title)
+                        Text(displayedAlgorithmTitle)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(secondaryTextColor)
+
+                        if showsActiveAlgorithmHint {
+                            Text("天气同步中，当前传输使用局部算法")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(secondaryTextColor)
+                        }
                     }
 
                     Spacer()
@@ -250,6 +256,15 @@ struct DeviceDiagnosticsSheet: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var displayedAlgorithmTitle: String {
+        (bleService.activeTransferAlgorithm ?? bleService.ditherAlgorithm).title
+    }
+
+    private var showsActiveAlgorithmHint: Bool {
+        guard let activeAlgorithm = bleService.activeTransferAlgorithm else { return false }
+        return activeAlgorithm != bleService.ditherAlgorithm
     }
 
     private func logRow(_ entry: DeviceDiagnosticLogEntry) -> some View {

@@ -14,10 +14,10 @@ struct GalleryPhoto: Identifiable, Equatable {
 }
 
 enum GalleryCacheStore {
-    private static let folderName = "GalleryPhotoCache"
-    private static let indexFileName = "gallery-index.json"
+    nonisolated private static let folderName = "GalleryPhotoCache"
+    nonisolated private static let indexFileName = "gallery-index.json"
 
-    static func loadPhotos() -> [GalleryPhoto] {
+    nonisolated static func loadPhotos() -> [GalleryPhoto] {
         let entries = loadEntries()
 
         return entries.compactMap { entry in
@@ -37,7 +37,7 @@ enum GalleryCacheStore {
         }
     }
 
-    static func appendPhoto(data: Data, title: String) -> GalleryPhoto? {
+    nonisolated static func appendPhoto(data: Data, title: String) -> GalleryPhoto? {
         guard let image = UIImage(data: data) else { return nil }
 
         do {
@@ -58,11 +58,11 @@ enum GalleryCacheStore {
         }
     }
 
-    static func clearAll() {
+    nonisolated static func clearAll() {
         try? FileManager.default.removeItem(at: cacheDirectoryURL)
     }
 
-    static func deletePhoto(id: UUID) {
+    nonisolated static func deletePhoto(id: UUID) {
         var entries = loadEntries()
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
 
@@ -71,7 +71,7 @@ enum GalleryCacheStore {
         try? saveEntries(entries)
     }
 
-    private static func loadEntries() -> [GalleryCacheEntry] {
+    nonisolated private static func loadEntries() -> [GalleryCacheEntry] {
         guard
             let data = try? Data(contentsOf: indexFileURL),
             let entries = try? JSONDecoder().decode([GalleryCacheEntry].self, from: data)
@@ -82,25 +82,25 @@ enum GalleryCacheStore {
         return entries
     }
 
-    private static func saveEntries(_ entries: [GalleryCacheEntry]) throws {
+    nonisolated private static func saveEntries(_ entries: [GalleryCacheEntry]) throws {
         try ensureCacheDirectoryExists()
         let data = try JSONEncoder().encode(entries)
         try data.write(to: indexFileURL, options: .atomic)
     }
 
-    private static func ensureCacheDirectoryExists() throws {
+    nonisolated private static func ensureCacheDirectoryExists() throws {
         try FileManager.default.createDirectory(
             at: cacheDirectoryURL,
             withIntermediateDirectories: true
         )
     }
 
-    private static var cacheDirectoryURL: URL {
+    nonisolated private static var cacheDirectoryURL: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(folderName, isDirectory: true)
     }
 
-    private static var indexFileURL: URL {
+    nonisolated private static var indexFileURL: URL {
         cacheDirectoryURL.appendingPathComponent(indexFileName)
     }
 }

@@ -346,7 +346,7 @@ private struct GalleryImageViewer: View {
         let displayImage = defaultDisplayImage(from: photo.image, device: device)
         pendingTransferData = photo.imageData
         pendingTransferImage = displayImage
-        bleService.transfer(image: transferImage, to: device)
+        bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
 
     private func openManualAdjustment() {

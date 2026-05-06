@@ -85,7 +85,7 @@ struct TransferSheetView: View {
 
             Button {
                 guard let device = activeDevice else { return }
-                bleService.transfer(image: transferImage, to: device)
+                bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
             } label: {
                 Label("传输到设备", systemImage: "paperplane.fill")
                     .frame(maxWidth: .infinity)
