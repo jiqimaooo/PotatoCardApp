@@ -71,6 +71,14 @@ final class WeatherSkillPushCoordinator {
     }
 
     func pushLatestWeather() async throws -> String {
+        try await pushLatestWeather(waitForFinalResult: true)
+    }
+
+    func startLatestWeatherPushFromShortcut() async throws -> String {
+        try await pushLatestWeather(waitForFinalResult: false)
+    }
+
+    private func pushLatestWeather(waitForFinalResult: Bool) async throws -> String {
         let store = WeatherSkillStore()
         logger.info("开始准备天气推送。技能开关=\(store.config.isEnabled, privacy: .public)")
 
@@ -100,14 +108,19 @@ final class WeatherSkillPushCoordinator {
             prepared.transferImage,
             displayImage: prepared.displayImage,
             toTargetDeviceSnapshot: prepared.targetDeviceSnapshot,
-            algorithm: store.config.imageAlgorithm
+            algorithm: store.config.imageAlgorithm,
+            returnAfterTransferStarted: !waitForFinalResult
         )
-        logger.info("蓝牙推送成功：\(device.name, privacy: .public)")
+        logger.info("蓝牙推送已进入目标状态：\(device.name, privacy: .public), waitForFinalResult=\(waitForFinalResult, privacy: .public)")
 
-        bleService.markLastTransferredImage(prepared.displayImage, for: device.id)
         store.updateTargetDevice(device)
-        store.markSynced()
-        return "已推送到\(device.name)"
+        if waitForFinalResult {
+            bleService.markLastTransferredImage(prepared.displayImage, for: device.id)
+            store.markSynced()
+            return "已推送到\(device.name)"
+        }
+
+        return "已开始传输数据到\(device.name)，后台会继续推送"
     }
 
     private func resolveTargetDeviceSnapshot(using store: WeatherSkillStore) throws -> WeatherTargetDeviceSnapshot {

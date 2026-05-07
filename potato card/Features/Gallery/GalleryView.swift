@@ -178,6 +178,7 @@ struct GalleryView: View {
     private func deletePhoto(_ photo: GalleryPhoto) {
         photos.removeAll { $0.id == photo.id }
         GalleryCacheStore.deletePhoto(id: photo.id)
+        TransferEditStateStore.delete(for: .gallery(photo.id))
     }
 
     private var primaryTextColor: Color {
@@ -292,6 +293,7 @@ private struct GalleryImageViewer: View {
                 TransferSheetView(
                     sourceImage: request.photo.image,
                     title: request.photo.title,
+                    editStateKey: .gallery(request.photo.id),
                     onTransferSucceeded: {
                         onTransferToDevice(request.photo.imageData)
                         dismiss()

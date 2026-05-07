@@ -134,6 +134,7 @@ struct WeatherTargetDeviceSnapshot: Codable, Equatable {
 
 struct WeatherSkillConfiguration: Codable, Equatable {
     var isEnabled = true
+    var isAutoUpdateEnabled = false
     var apiKey = ""
     var apiHost = ""
     var cityMode: WeatherCityMode = .automatic
@@ -151,6 +152,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled
+        case isAutoUpdateEnabled
         case apiKey
         case apiHost
         case cityMode
@@ -171,6 +173,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        isAutoUpdateEnabled = try container.decodeIfPresent(Bool.self, forKey: .isAutoUpdateEnabled) ?? false
         // Host 和 Key 现在随技能配置保存在 UserDefaults，卸载重装后会被清空。
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         apiHost = try container.decodeIfPresent(String.self, forKey: .apiHost) ?? ""
@@ -197,6 +200,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(isAutoUpdateEnabled, forKey: .isAutoUpdateEnabled)
         // 显式编码凭据配置，确保 App 更新时 UserDefaults 能继续保留。
         try container.encode(apiKey, forKey: .apiKey)
         try container.encode(apiHost, forKey: .apiHost)

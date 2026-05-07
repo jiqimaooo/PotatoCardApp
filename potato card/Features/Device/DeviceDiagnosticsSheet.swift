@@ -4,7 +4,6 @@ struct DeviceDiagnosticsSheet: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isAlgorithmExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -15,7 +14,6 @@ struct DeviceDiagnosticsSheet: View {
                     VStack(spacing: 16) {
                         deviceSummaryCard
                         backgroundShortcutCard
-                        algorithmCard
                         logCard
                     }
                     .padding(.horizontal, 18)
@@ -107,6 +105,9 @@ struct DeviceDiagnosticsSheet: View {
                     shortcutInfoRow(title: "目标设备", value: record.targetDeviceName)
                     shortcutInfoRow(title: "任务编号", value: String(record.jobID.prefix(8)))
                     shortcutInfoRow(title: "耗时", value: record.durationText)
+                    if let lastEvent = record.lastEvent, !lastEvent.isEmpty {
+                        shortcutInfoRow(title: "最近阶段", value: lastEvent)
+                    }
                     if let errorMessage = record.errorMessage, !errorMessage.isEmpty {
                         shortcutInfoRow(title: "失败原因", value: errorMessage)
                     }
@@ -115,53 +116,6 @@ struct DeviceDiagnosticsSheet: View {
                 Text("暂无后台快捷指令记录")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(secondaryTextColor)
-            }
-        }
-        .padding(18)
-        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(cardStroke)
-    }
-
-    private var algorithmCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Button {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    isAlgorithmExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("图像算法")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(primaryTextColor)
-
-                        Text(displayedAlgorithmTitle)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(secondaryTextColor)
-
-                        if showsActiveAlgorithmHint {
-                            Text("天气同步中，当前传输使用局部算法")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(secondaryTextColor)
-                        }
-                    }
-
-                    Spacer()
-
-                    Image(systemName: isAlgorithmExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(secondaryTextColor)
-                }
-            }
-            .buttonStyle(.plain)
-
-            if isAlgorithmExpanded {
-                VStack(spacing: 8) {
-                    ForEach(EInkDitherAlgorithm.allCases) { algorithm in
-                        algorithmRow(algorithm)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(18)
@@ -223,48 +177,6 @@ struct DeviceDiagnosticsSheet: View {
         .padding(18)
         .background(cardFillColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(cardStroke)
-    }
-
-    private func algorithmRow(_ algorithm: EInkDitherAlgorithm) -> some View {
-        Button {
-            bleService.setDitherAlgorithm(algorithm)
-        } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(algorithm.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(primaryTextColor)
-
-                    Text(algorithm.subtitle)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(secondaryTextColor)
-                }
-
-                Spacer()
-
-                if bleService.ditherAlgorithm == algorithm {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(accentColor)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(bleService.ditherAlgorithm == algorithm ? selectedAlgorithmFillColor : rowFillColor)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var displayedAlgorithmTitle: String {
-        (bleService.activeTransferAlgorithm ?? bleService.ditherAlgorithm).title
-    }
-
-    private var showsActiveAlgorithmHint: Bool {
-        guard let activeAlgorithm = bleService.activeTransferAlgorithm else { return false }
-        return activeAlgorithm != bleService.ditherAlgorithm
     }
 
     private func logRow(_ entry: DeviceDiagnosticLogEntry) -> some View {
@@ -353,10 +265,6 @@ struct DeviceDiagnosticsSheet: View {
 
     private var rowFillColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.045)
-    }
-
-    private var selectedAlgorithmFillColor: Color {
-        colorScheme == .dark ? accentColor.opacity(0.18) : accentColor.opacity(0.10)
     }
 
     private var logFillColor: Color {

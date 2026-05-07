@@ -216,6 +216,7 @@ private struct AlbumImageViewer: View {
                 TransferSheetView(
                     sourceImage: request.image,
                     title: request.album,
+                    editStateKey: .album(request.album),
                     onTransferSucceeded: {
                         onTransferToDevice(request.album)
                         dismiss()

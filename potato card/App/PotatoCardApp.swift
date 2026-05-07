@@ -10,11 +10,19 @@ import SwiftUI
 @main
 struct PotatoCardApp: App {
     @StateObject private var bleTransferService = BleTransferService.shared
+    @StateObject private var weatherAutoUpdateScheduler = WeatherAutoUpdateScheduler()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(bleTransferService)
+                .onAppear {
+                    weatherAutoUpdateScheduler.handleScenePhase(scenePhase)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    weatherAutoUpdateScheduler.handleScenePhase(phase)
+                }
         }
     }
 }

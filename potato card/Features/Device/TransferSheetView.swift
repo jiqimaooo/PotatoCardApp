@@ -4,12 +4,16 @@ import UIKit
 struct TransferSheetView: View {
     let sourceImage: UIImage
     let title: String
+    var editStateKey: TransferEditStateKey? = nil
     var onTransferSucceeded: (() -> Void)?
 
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var adjustment = EInkManualAdjustment.default
+    @State private var selectedDitherAlgorithm: EInkDitherAlgorithm = .floydSteinberg
+    @State private var didLoadInitialState = false
+    @State private var isAlgorithmExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -20,6 +24,7 @@ struct TransferSheetView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         previewSection
                         adjustmentSection
+                        algorithmSection
                         transferSection
                     }
                     .padding(.horizontal, 20)
@@ -28,6 +33,9 @@ struct TransferSheetView: View {
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                loadInitialStateIfNeeded()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("关闭") {
@@ -37,6 +45,7 @@ struct TransferSheetView: View {
             }
             .onChange(of: bleService.transferPhase) { _, phase in
                 if phase == .succeeded {
+                    saveEditStateIfNeeded()
                     bleService.markLastTransferredImage(displayImage)
                     onTransferSucceeded?()
                     dismiss()
@@ -62,14 +71,6 @@ struct TransferSheetView: View {
 
     private var transferSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("传输")
-
-            if let device = activeDevice, device.profile.isFallback {
-                Text("未知型号，使用默认尺寸 \(device.profile.displaySize)。")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(secondaryTextColor)
-            }
-
             if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
                 Text(errorMessage)
                     .font(.system(size: 13, weight: .semibold))
@@ -85,7 +86,12 @@ struct TransferSheetView: View {
 
             Button {
                 guard let device = activeDevice else { return }
-                bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
+                bleService.transfer(
+                    image: transferImage,
+                    displayImage: displayImage,
+                    to: device,
+                    algorithm: selectedDitherAlgorithm
+                )
             } label: {
                 Label("传输到设备", systemImage: "paperplane.fill")
                     .frame(maxWidth: .infinity)
@@ -95,11 +101,85 @@ struct TransferSheetView: View {
         }
     }
 
+    private var algorithmSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    isAlgorithmExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("图像算法")
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .foregroundStyle(primaryTextColor)
+
+                        Text(selectedDitherAlgorithm.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(secondaryTextColor)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: isAlgorithmExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(secondaryTextColor)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isAlgorithmExpanded {
+                VStack(spacing: 8) {
+                    ForEach(EInkDitherAlgorithm.allCases) { algorithm in
+                        algorithmRow(algorithm)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private func algorithmRow(_ algorithm: EInkDitherAlgorithm) -> some View {
+        Button {
+            selectedDitherAlgorithm = algorithm
+            bleService.setDitherAlgorithm(algorithm)
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(algorithm.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(primaryTextColor)
+
+                    Text(algorithm.subtitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(secondaryTextColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                if selectedDitherAlgorithm == algorithm {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(selectedDitherAlgorithm == algorithm ? selectedAlgorithmFillColor : rowFillColor)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(bleService.transferPhase == .transferring || bleService.transferPhase == .preparing)
+    }
+
     private var adjustmentSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader("手动调整")
 
-            adjustmentSlider(title: "缩放", value: $adjustment.scale, range: 1...3)
+            adjustmentSlider(title: "缩放", value: $adjustment.scale, range: 0.25...3)
             adjustmentSlider(title: "水平", value: $adjustment.offsetX, range: -160...160)
             adjustmentSlider(title: "垂直", value: $adjustment.offsetY, range: -160...160)
 
@@ -120,6 +200,21 @@ struct TransferSheetView: View {
 
             Slider(value: value, in: range)
         }
+    }
+
+    private func loadInitialStateIfNeeded() {
+        guard !didLoadInitialState else { return }
+        didLoadInitialState = true
+        selectedDitherAlgorithm = bleService.ditherAlgorithm
+
+        guard let editStateKey, let savedAdjustment = TransferEditStateStore.load(for: editStateKey) else { return }
+        // 单图只恢复缩放和偏移，图像算法仍然走全局设置。
+        adjustment = savedAdjustment
+    }
+
+    private func saveEditStateIfNeeded() {
+        guard let editStateKey else { return }
+        TransferEditStateStore.save(adjustment, for: editStateKey)
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -145,7 +240,7 @@ struct TransferSheetView: View {
             fitMode: .manual,
             adjustment: adjustment,
             profile: profile,
-            ditherAlgorithm: bleService.ditherAlgorithm
+            ditherAlgorithm: selectedDitherAlgorithm
         )
     }
 
@@ -167,6 +262,18 @@ struct TransferSheetView: View {
 
     private var secondaryTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.58) : Color.black.opacity(0.48)
+    }
+
+    private var rowFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.045)
+    }
+
+    private var selectedAlgorithmFillColor: Color {
+        colorScheme == .dark ? accentColor.opacity(0.18) : accentColor.opacity(0.10)
+    }
+
+    private var accentColor: Color {
+        Color(red: 0.18, green: 0.49, blue: 0.98)
     }
 
 }

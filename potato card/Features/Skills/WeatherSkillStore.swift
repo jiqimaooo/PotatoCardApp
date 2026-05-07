@@ -45,6 +45,11 @@ final class WeatherSkillStore: ObservableObject {
         persistConfiguration()
     }
 
+    func updateAutoUpdateEnabled(_ isEnabled: Bool) {
+        config.isAutoUpdateEnabled = isEnabled
+        persistConfiguration()
+    }
+
     func updateAPIKey(_ value: String) {
         let trimmedValue = value.trimmed
         config.apiKey = trimmedValue

@@ -225,6 +225,7 @@ struct ContentView: View {
                     HStack(spacing: 12) {
                         bluetoothStatusIcon
                         diagnosticsSettingsButton
+                        batteryStatusPill
                     }
                     .padding(.bottom, 25)
                 }
@@ -395,14 +396,14 @@ struct ContentView: View {
     }
 
     private var batteryStatusPill: some View {
-        let percent = displayedBatteryPercent
+        let percent = bleService.displayedBatteryPercent
         let color = batteryLevelColor(for: percent)
 
-        return HStack(spacing: 7) {
+        return HStack(spacing: 5) {
             BatteryLevelIcon(percent: percent, color: color)
                 .frame(width: 22, height: 12)
 
-            Text(percent.map { "\($0)%" } ?? "--%")
+            Text(percent.map { "\(min(100, max(0, $0)))%" } ?? "--%")
                 .font(.system(size: 12, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(secondaryTextColor)
@@ -414,10 +415,7 @@ struct ContentView: View {
             Capsule()
                 .stroke(statusPillStrokeColor, lineWidth: 1)
         )
-    }
-
-    private var displayedBatteryPercent: Int? {
-        (bleService.connectedDevice ?? bleService.selectedDevice)?.batteryPercent
+        .accessibilityLabel(percent.map { "设备电量 \(min(100, max(0, $0)))%" } ?? "设备电量未知")
     }
 
     private func batteryLevelColor(for percent: Int?) -> Color {
@@ -585,26 +583,35 @@ private struct BatteryLevelIcon: View {
     let percent: Int?
     let color: Color
 
+    private var clampedPercent: Int? {
+        percent.map { min(100, max(0, $0)) }
+    }
+
     private var fillRatio: CGFloat {
-        CGFloat(percent ?? 0) / 100
+        CGFloat(clampedPercent ?? 0) / 100
     }
 
     var body: some View {
         HStack(spacing: 1.5) {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2.6, style: .continuous)
-                    .stroke(color.opacity(percent == nil ? 0.55 : 1), lineWidth: 1.4)
+                    .stroke(color.opacity(clampedPercent == nil ? 0.55 : 1), lineWidth: 1.4)
 
                 GeometryReader { proxy in
+                    let inset: CGFloat = 2
+                    let fillWidth = max((proxy.size.width - inset * 2) * fillRatio, 0)
+                    let fillHeight = max(proxy.size.height - inset * 2, 0)
+
+                    // 按内边距后的可用区域填充，满电时左右留白保持一致。
                     RoundedRectangle(cornerRadius: 1.8, style: .continuous)
                         .fill(color)
-                        .frame(width: max(proxy.size.width * fillRatio - 3, 0))
-                        .padding(2)
+                        .frame(width: fillWidth, height: fillHeight)
+                        .offset(x: inset, y: inset)
                 }
             }
 
             RoundedRectangle(cornerRadius: 0.8, style: .continuous)
-                .fill(color.opacity(percent == nil ? 0.55 : 1))
+                .fill(color.opacity(clampedPercent == nil ? 0.55 : 1))
                 .frame(width: 2.2, height: 5.5)
         }
     }

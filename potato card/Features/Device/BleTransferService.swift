@@ -90,6 +90,12 @@ enum BleConnectionPhase: Equatable {
     }
 }
 
+enum BatteryDisplayState: Equatable {
+    case cached
+    case live
+    case empty
+}
+
 enum DeviceDiagnosticLogLevel: String, Codable, Equatable {
     case info
     case success
@@ -142,6 +148,7 @@ struct BackgroundShortcutTransferRecord: Codable, Equatable {
     let targetDeviceID: String
     let targetDeviceName: String
     var phase: BackgroundShortcutTransferPhase
+    var lastEvent: String?
     let startedAt: Date
     var finishedAt: Date?
     var errorMessage: String?
@@ -157,10 +164,11 @@ enum BleTransferError: LocalizedError {
     case bluetoothUnavailable(String)
     case transferBusy
     case deviceNotReady
+    case deviceInfoInvalid
+    case imageInvalid
     case deviceNotFound(String)
     case transferFailed(String)
     case transferTimedOut
-    case transferNoProgressAfterReceive
     case bluetoothReadyTimedOut
     case backgroundTimeExpired
 
@@ -172,14 +180,16 @@ enum BleTransferError: LocalizedError {
             return "当前已有传输任务在进行中，请稍后再试。"
         case .deviceNotReady:
             return "目标设备信息不完整，请重新选择同步设备。"
+        case .deviceInfoInvalid:
+            return "设备信息异常，请重新连接设备。"
+        case .imageInvalid:
+            return "图片生成异常，请重新选择图片。"
         case .deviceNotFound(let name):
             return "没有扫描到设备 \(name)，纯后台推送只在设备已连接或可快速扫描到时可靠。"
         case .transferFailed(let message):
             return message
         case .transferTimedOut:
             return "设备传输超时，请重试。"
-        case .transferNoProgressAfterReceive:
-            return "设备已开始接收图片，但后台模式下没有继续返回传输进度。当前 SDK 后台传输不稳定，请保持 App 前台重试。"
         case .bluetoothReadyTimedOut:
             return "蓝牙状态初始化超时，请确认蓝牙已开启后重试。"
         case .backgroundTimeExpired:
@@ -193,10 +203,59 @@ private enum BleTransferPresentationMode {
     case backgroundShortcut
 }
 
+private enum BackgroundShortcutReturnPolicy {
+    case waitForCompletion
+    case returnAfterTransferStarted
+}
+
+private struct BleTransferPreflight {
+    let imageDataSize: Int
+    let serviceUUID: String
+    let controlCharacteristicUUID: String
+    let writeCharacteristicUUID: String
+}
+
 private enum BleDiagnosticsStorage {
     static let ditherAlgorithmKey = "selectedEInkDitherAlgorithm"
     static let backgroundShortcutTransferKey = "lastBackgroundShortcutTransferRecord"
+    static let batteryCacheKey = "deviceBatteryCacheByID"
+    static let lastBatteryDeviceIDKey = "lastBatteryDeviceID"
     static let maxLogCount = 120
+}
+
+private struct DeviceBatterySnapshot: Codable, Equatable {
+    let deviceID: String
+    let percent: Int
+    let voltage: Double?
+    let updatedAt: Date
+}
+
+private enum DeviceBatteryCacheStore {
+    static func load() -> [String: DeviceBatterySnapshot] {
+        guard let data = UserDefaults.standard.data(forKey: BleDiagnosticsStorage.batteryCacheKey),
+              let snapshots = try? JSONDecoder().decode([String: DeviceBatterySnapshot].self, from: data) else {
+            return [:]
+        }
+        return snapshots
+    }
+
+    static func save(_ snapshots: [String: DeviceBatterySnapshot]) {
+        guard let data = try? JSONEncoder().encode(snapshots) else { return }
+        UserDefaults.standard.set(data, forKey: BleDiagnosticsStorage.batteryCacheKey)
+    }
+
+    static var lastDeviceID: String? {
+        get {
+            UserDefaults.standard.string(forKey: BleDiagnosticsStorage.lastBatteryDeviceIDKey)
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue, forKey: BleDiagnosticsStorage.lastBatteryDeviceIDKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: BleDiagnosticsStorage.lastBatteryDeviceIDKey)
+            }
+        }
+    }
 }
 
 // SDK 回调会把原始设备字典从后台线程带回主线程，这里用一个受控的桥接盒子收口并发边界。
@@ -255,7 +314,12 @@ final class BleTransferService: ObservableObject {
     @Published private(set) var activeTransferAlgorithm: EInkDitherAlgorithm?
     @Published private(set) var diagnosticLogs: [DeviceDiagnosticLogEntry] = []
     @Published private(set) var lastBackgroundShortcutTransfer: BackgroundShortcutTransferRecord?
+    @Published private(set) var displayedBatteryPercent: Int?
+    @Published private(set) var batteryDisplayState: BatteryDisplayState = .empty
     private var wantsForegroundAutoScan = false
+    private var lastBatteryByDeviceID: [String: DeviceBatterySnapshot]
+    private var batteryRefreshTimeoutTask: Task<Void, Never>?
+    private var batteryRefreshGeneration = 0
     private let transferredImageStore = TransferredDeviceImageStore()
     private let liveTransferActivity = LiveTransferActivityController()
     private var transferBackgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -266,10 +330,12 @@ final class BleTransferService: ObservableObject {
     private var automatedMatchedDevice: BleDevice?
     private var automatedPushImage: UIImage?
     private var automatedPushDisplayImage: UIImage?
+    private var automatedReturnPolicy: BackgroundShortcutReturnPolicy = .waitForCompletion
     private var activeTransferDisplayImage: UIImage?
 
     init(forcePreviewPrompt: Bool = false) {
         rememberedDeviceIDs = Set(UserDefaults.standard.stringArray(forKey: Self.rememberedDeviceIDsKey) ?? [])
+        lastBatteryByDeviceID = DeviceBatteryCacheStore.load()
         if let savedAlgorithm = UserDefaults.standard.string(forKey: BleDiagnosticsStorage.ditherAlgorithmKey),
            let algorithm = EInkDitherAlgorithm(rawValue: savedAlgorithm) {
             ditherAlgorithm = algorithm
@@ -280,11 +346,13 @@ final class BleTransferService: ObservableObject {
             BleDevice(rawDevice: [
                 "name": "NEMR92957953",
                 "address": "PREVIEW-DEVICE",
-                "power": 82
+                "power": 32
             ])
         ]
         selectedDevice = devices.first
         appendDiagnosticLog("模拟器调试会话已启动，算法：\(ditherAlgorithm.title)")
+        restoreDisplayedBatteryFromCache(for: selectedDevice)
+        updateBatteryDisplay(from: selectedDevice, source: .live)
         if forcePreviewPrompt {
             proximityPromptDevice = devices.first
         }
@@ -303,6 +371,7 @@ final class BleTransferService: ObservableObject {
         errorMessage = nil
         isScanning = true
         appendDiagnosticLog("开始扫描附近设备")
+        beginBatteryRefreshWindow()
         presentPromptIfNeeded(for: devices.first)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -313,12 +382,13 @@ final class BleTransferService: ObservableObject {
                     BleDevice(rawDevice: [
                         "name": "NEMR92957953",
                         "address": "PREVIEW-DEVICE",
-                        "power": 82
+                        "power": 32
                     ])
                 ]
                 self.selectedDevice = self.devices.first
             }
             if let device = self.devices.first {
+                self.updateBatteryDisplay(from: device, source: .live)
                 self.appendDiagnosticLog("发现设备：\(device.name) · \(device.profile.displaySize)")
             }
             self.presentPromptIfNeeded(for: self.devices.first)
@@ -351,6 +421,8 @@ final class BleTransferService: ObservableObject {
     func select(_ device: BleDevice) {
         selectedDevice = device
         appendDiagnosticLog("选择设备：\(device.name)")
+        restoreDisplayedBatteryFromCache(for: device)
+        updateBatteryDisplay(from: device, source: .live)
         syncLastTransferredImage(for: device)
     }
 
@@ -358,6 +430,7 @@ final class BleTransferService: ObservableObject {
         stopScan()
         selectedDevice = device
         connectionPhase = .connecting
+        restoreDisplayedBatteryFromCache(for: device)
         appendDiagnosticLog("开始连接设备：\(device.name)")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -366,6 +439,7 @@ final class BleTransferService: ObservableObject {
             self.selectedDevice = device
             self.connectionPhase = .connected
             self.rememberDevice(device)
+            self.updateBatteryDisplay(from: device, source: .live)
             self.syncLastTransferredImage(for: device)
             self.appendDiagnosticLog("设备已连接：\(device.name)", level: .success)
 
@@ -427,7 +501,13 @@ final class BleTransferService: ObservableObject {
         diagnosticLogs.removeAll()
     }
 
-    func pushWeatherImage(_ image: UIImage, displayImage: UIImage? = nil, toTargetDeviceSnapshot snapshot: WeatherTargetDeviceSnapshot, algorithm: EInkDitherAlgorithm? = nil) async throws -> BleDevice {
+    func pushWeatherImage(
+        _ image: UIImage,
+        displayImage: UIImage? = nil,
+        toTargetDeviceSnapshot snapshot: WeatherTargetDeviceSnapshot,
+        algorithm: EInkDitherAlgorithm? = nil,
+        returnAfterTransferStarted: Bool = false
+    ) async throws -> BleDevice {
         logger.info("模拟器环境开始天气推送：targetID=\(snapshot.id, privacy: .public), name=\(snapshot.name, privacy: .public)")
         transferPresentationMode = .backgroundShortcut
         beginBackgroundShortcutTransferRecord(for: snapshot)
@@ -453,13 +533,15 @@ final class BleTransferService: ObservableObject {
         automatedMatchedDevice = device
         automatedPushImage = image
         automatedPushDisplayImage = displayImage ?? image
+        automatedReturnPolicy = returnAfterTransferStarted ? .returnAfterTransferStarted : .waitForCompletion
 
         return try await withCheckedThrowingContinuation { continuation in
             automatedPushContinuation = continuation
             // 后台快捷指令在开始扫描/连接前就申请执行时间，避免尚未传输就被挂起。
             beginTransferBackgroundTask()
-            updateBackgroundShortcutTransferRecord(phase: .transferring)
+            updateBackgroundShortcutTransferRecord(phase: .transferring, lastEvent: "模拟器：开始传输")
             transfer(image: image, to: device, algorithm: algorithm)
+            resolveShortcutIntentAfterTransferStartedIfNeeded(device: device, reason: "模拟器：设备开始接收")
         }
     }
 
@@ -515,6 +597,7 @@ final class BleTransferService: ObservableObject {
         automatedMatchedDevice = nil
         automatedPushImage = nil
         automatedPushDisplayImage = nil
+        automatedReturnPolicy = .waitForCompletion
         activeTransferDisplayImage = nil
         activeTransferAlgorithm = nil
         // 模拟器也保持同样的收尾语义，避免预览调试时留下后台任务。
@@ -540,6 +623,17 @@ final class BleTransferService: ObservableObject {
             appendDiagnosticLog("自动推送失败：\(error.localizedDescription)", level: .error)
             continuation?.resume(throwing: error)
         }
+    }
+
+    private func resolveShortcutIntentAfterTransferStartedIfNeeded(device: BleDevice, reason: String) {
+        guard transferPresentationMode == .backgroundShortcut else { return }
+        guard automatedReturnPolicy == .returnAfterTransferStarted else { return }
+        guard let continuation = automatedPushContinuation else { return }
+
+        automatedPushContinuation = nil
+        updateBackgroundShortcutTransferRecord(phase: .transferring, lastEvent: "已返回快捷指令：\(reason)")
+        appendDiagnosticLog("快捷指令已返回，后台继续传输：\(reason)", level: .success)
+        continuation.resume(returning: device)
     }
 
     private func beginTransferAuxiliaryWorkIfNeeded(for deviceName: String) {
@@ -623,7 +717,12 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     @Published private(set) var activeTransferAlgorithm: EInkDitherAlgorithm?
     @Published private(set) var diagnosticLogs: [DeviceDiagnosticLogEntry] = []
     @Published private(set) var lastBackgroundShortcutTransfer: BackgroundShortcutTransferRecord?
+    @Published private(set) var displayedBatteryPercent: Int?
+    @Published private(set) var batteryDisplayState: BatteryDisplayState = .empty
     private var wantsForegroundAutoScan = false
+    private var lastBatteryByDeviceID: [String: DeviceBatterySnapshot]
+    private var batteryRefreshTimeoutTask: Task<Void, Never>?
+    private var batteryRefreshGeneration = 0
 
     private lazy var manager = PickBleManager.shared()
     private let transferredImageStore = TransferredDeviceImageStore()
@@ -636,18 +735,18 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     private var automatedPushImage: UIImage?
     private var automatedPushDisplayImage: UIImage?
     private var automatedPushAlgorithm: EInkDitherAlgorithm?
+    private var automatedReturnPolicy: BackgroundShortcutReturnPolicy = .waitForCompletion
     private var activeTransferDisplayImage: UIImage?
     private var automatedTargetSnapshot: WeatherTargetDeviceSnapshot?
     private var automatedMatchedDevice: BleDevice?
     private var automatedScanTimeoutTask: Task<Void, Never>?
     private var automatedTransferTimeoutTask: Task<Void, Never>?
-    private var automatedNoProgressTimeoutTask: Task<Void, Never>?
     private var transferBackgroundTask: BleBackgroundTaskBox?
     private var lastLoggedTransferPercentBucket = -1
-    private var lastSeenDeviceDates: [String: Date] = [:]
 
     override init() {
         rememberedDeviceIDs = Set(UserDefaults.standard.stringArray(forKey: Self.rememberedDeviceIDsKey) ?? [])
+        lastBatteryByDeviceID = DeviceBatteryCacheStore.load()
         if let savedAlgorithm = UserDefaults.standard.string(forKey: BleDiagnosticsStorage.ditherAlgorithmKey),
            let algorithm = EInkDitherAlgorithm(rawValue: savedAlgorithm) {
             ditherAlgorithm = algorithm
@@ -656,6 +755,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         lastTransferredImage = transferredImageStore.loadLatestImage()
         super.init()
         appendDiagnosticLog("调试会话已启动，算法：\(ditherAlgorithm.title)")
+        restoreDisplayedBatteryFromCache()
     }
 
     convenience init(forcePreviewPrompt: Bool) {
@@ -684,6 +784,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         selectedDevice = connectedDevice
         isScanning = true
         appendDiagnosticLog("开始扫描附近设备")
+        beginBatteryRefreshWindow()
         manager.stopScan()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -720,6 +821,8 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     func select(_ device: BleDevice) {
         selectedDevice = device
         appendDiagnosticLog("选择设备：\(device.name)")
+        restoreDisplayedBatteryFromCache(for: device)
+        updateBatteryDisplay(from: device, source: .live)
         syncLastTransferredImage(for: device)
     }
 
@@ -727,6 +830,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         stopScan()
         selectedDevice = device
         connectionPhase = .connecting
+        restoreDisplayedBatteryFromCache(for: device)
         appendDiagnosticLog("开始连接设备：\(device.name)")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -735,6 +839,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
             self.selectedDevice = device
             self.connectionPhase = .connected
             self.rememberDevice(device)
+            self.updateBatteryDisplay(from: device, source: .live)
             self.syncLastTransferredImage(for: device)
             self.appendDiagnosticLog("设备已连接：\(device.name)", level: .success)
 
@@ -789,16 +894,13 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
 
         // 优先使用扫描列表里的新设备对象，避免长时间停留后把过期 rawDevice 传给 SDK。
         let transferDevice = freshestDevice(for: device)
-        guard isSDKTransferDeviceReady(transferDevice) else {
-            let message = BleTransferError.deviceNotReady.localizedDescription
-            transferPhase = .failed(message)
-            errorMessage = message
-            appendDiagnosticLog("传输失败：设备参数缺少 peripheral，请重新扫描后再试。", level: .error)
-            if presentationMode == .backgroundShortcut {
-                finishAutomatedPush(with: .failure(BleTransferError.deviceNotReady))
-            }
-            return
-        }
+        guard let preflight = validateTransferInputs(
+            image: image,
+            device: transferDevice,
+            requestedDevice: device,
+            presentationMode: presentationMode,
+            algorithm: transferAlgorithm
+        ) else { return }
 
         transferPresentationMode = presentationMode
         selectedDevice = transferDevice
@@ -813,7 +915,172 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         appendDiagnosticLog("开始传输：\(transferDevice.name)，算法：\(transferAlgorithm.title)")
         beginTransferAuxiliaryWorkIfNeeded(for: transferDevice.name)
 
-        manager.updateImage(withDevice: transferDevice.rawDevice, image: image)
+        logger.info("即将调用 PickBleManager.updateImageWithDevice:image: deviceID=\(transferDevice.id, privacy: .public), imageDataSize=\(preflight.imageDataSize, privacy: .public), serviceUUID=\(preflight.serviceUUID, privacy: .public), controlUUID=\(preflight.controlCharacteristicUUID, privacy: .public), writeUUID=\(preflight.writeCharacteristicUUID, privacy: .public)")
+        appendDiagnosticLog("SDK 调用前：device=\(transferDevice.id)，imageData=\(preflight.imageDataSize) bytes")
+        manager.updateImage(withDevice: transferDevice.sdkTransferDevice, image: image)
+    }
+
+    private func validateTransferInputs(
+        image: UIImage,
+        device: BleDevice,
+        requestedDevice: BleDevice,
+        presentationMode: BleTransferPresentationMode,
+        algorithm: EInkDitherAlgorithm
+    ) -> BleTransferPreflight? {
+        let selectedSummary = selectedDevice?.debugSummary ?? "nil"
+        let connectedSummary = connectedDevice?.debugSummary ?? "nil"
+        let rawKeys = device.rawDevice.keys
+            .map { String(describing: $0) }
+            .sorted()
+            .joined(separator: ",")
+        let presentationModeText = transferPresentationModeText(presentationMode)
+        let requestedDeviceSummary = requestedDevice.debugSummary
+
+        logger.info("transfer start: presentationMode=\(presentationModeText, privacy: .public), algorithm=\(algorithm.title, privacy: .public), selectedDevice=\(selectedSummary, privacy: .public), connectedDevice=\(connectedSummary, privacy: .public), requestedDevice=\(requestedDeviceSummary, privacy: .public), transferDevice=\(device.debugSummary, privacy: .public), rawKeys=\(rawKeys, privacy: .public)")
+        // 这些日志同步进首页设置弹窗，真机联调时不用只依赖 Xcode 控制台。
+        appendDiagnosticLog("传输开始：mode=\(presentationModeText)，算法=\(algorithm.title)")
+        appendDiagnosticLog("设备选择：selected=\(selectedDevice?.id ?? "nil")，connected=\(connectedDevice?.id ?? "nil")，target=\(device.id)")
+        appendDiagnosticLog("设备 rawKeys：\(rawKeys.isEmpty ? "nil" : rawKeys)")
+
+        guard presentationMode == .backgroundShortcut || selectedDevice != nil || connectedDevice != nil else {
+            return failTransferPreflight(
+                BleTransferError.deviceInfoInvalid,
+                detail: "selectedDevice 和 connectedDevice 均为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        guard image.size.width > 0, image.size.height > 0 else {
+            return failTransferPreflight(
+                BleTransferError.imageInvalid,
+                detail: "UIImage size 异常：\(image.size.width)x\(image.size.height)",
+                presentationMode: presentationMode
+            )
+        }
+
+        guard let cgImage = image.cgImage else {
+            return failTransferPreflight(
+                BleTransferError.imageInvalid,
+                detail: "UIImage.cgImage 为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        guard let imageData = image.pngData(), !imageData.isEmpty else {
+            return failTransferPreflight(
+                BleTransferError.imageInvalid,
+                detail: "UIImage.pngData 生成失败或为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        guard !device.id.trimmed.isEmpty else {
+            return failTransferPreflight(
+                BleTransferError.deviceInfoInvalid,
+                detail: "设备 id 为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        let mac = firstNonEmptyRawString(["mac", "macAddress", "address"], in: device.rawDevice, fallback: device.address)
+        guard let mac else {
+            return failTransferPreflight(
+                BleTransferError.deviceInfoInvalid,
+                detail: "设备 mac/macAddress/address 均为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        let name = firstNonEmptyRawString(["name", "localName"], in: device.rawDevice, fallback: device.name)
+        guard let name else {
+            return failTransferPreflight(
+                BleTransferError.deviceInfoInvalid,
+                detail: "设备 name/localName 为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        // 协议文档固定使用 FEF0/FEF1/FEF2；SDK 扫描字典通常不带这些字段，缺失时用协议常量记录。
+        let serviceUUID = firstNonEmptyRawString(["serviceUUID", "serviceUuid", "service"], in: device.rawDevice, fallback: "FEF0")
+        let controlUUID = firstNonEmptyRawString(["controlCharacteristicUUID", "notifyCharacteristicUUID", "characteristicUUID"], in: device.rawDevice, fallback: "FEF1")
+        let writeUUID = firstNonEmptyRawString(["writeCharacteristicUUID", "writeUUID"], in: device.rawDevice, fallback: "FEF2")
+
+        guard let serviceUUID, let controlUUID, let writeUUID else {
+            return failTransferPreflight(
+                BleTransferError.deviceInfoInvalid,
+                detail: "服务或特征 UUID 为空",
+                presentationMode: presentationMode
+            )
+        }
+
+        logger.info("transfer device info: id=\(device.id, privacy: .public), mac=\(mac, privacy: .public), name=\(name, privacy: .public), serviceUUID=\(serviceUUID, privacy: .public), controlCharacteristicUUID=\(controlUUID, privacy: .public), writeCharacteristicUUID=\(writeUUID, privacy: .public)")
+        logger.info("transfer image info: imageSize=\(image.size.width, privacy: .public)x\(image.size.height, privacy: .public), scale=\(image.scale, privacy: .public), cgImageSize=\(cgImage.width, privacy: .public)x\(cgImage.height, privacy: .public), imageDataSize=\(imageData.count, privacy: .public)")
+        appendDiagnosticLog("设备字段：id=\(device.id)，mac=\(mac)，name=\(name)")
+        appendDiagnosticLog("协议字段：service=\(serviceUUID)，control=\(controlUUID)，write=\(writeUUID)")
+        appendDiagnosticLog("图片字段：ui=\(Int(image.size.width))x\(Int(image.size.height))，cg=\(cgImage.width)x\(cgImage.height)，data=\(imageData.count) bytes")
+        appendDiagnosticLog("传输预检通过：\(device.name) · \(Int(image.size.width))x\(Int(image.size.height)) · \(imageData.count) bytes")
+
+        return BleTransferPreflight(
+            imageDataSize: imageData.count,
+            serviceUUID: serviceUUID,
+            controlCharacteristicUUID: controlUUID,
+            writeCharacteristicUUID: writeUUID
+        )
+    }
+
+    private func failTransferPreflight(
+        _ error: BleTransferError,
+        detail: String,
+        presentationMode: BleTransferPresentationMode
+    ) -> BleTransferPreflight? {
+        let message = error.localizedDescription
+        transferPhase = .failed(message)
+        errorMessage = message
+        logger.error("传输预检失败：\(message, privacy: .public) detail=\(detail, privacy: .public)")
+        appendDiagnosticLog("传输预检失败：\(message) · \(detail)", level: .error)
+
+        if presentationMode == .backgroundShortcut {
+            finishAutomatedPush(with: .failure(error))
+        }
+
+        return nil
+    }
+
+    private func firstNonEmptyRawString(_ keys: [String], in rawDevice: [AnyHashable: Any], fallback: String? = nil) -> String? {
+        for key in keys {
+            guard let value = rawDevice[key] else { continue }
+            if let string = normalizedNonEmptyString(value) {
+                return string
+            }
+        }
+
+        return normalizedNonEmptyString(fallback)
+    }
+
+    private func normalizedNonEmptyString(_ value: Any?) -> String? {
+        guard let value else { return nil }
+
+        let string: String
+        if let rawString = value as? String {
+            string = rawString
+        } else if let number = value as? NSNumber {
+            string = number.stringValue
+        } else {
+            string = String(describing: value)
+        }
+
+        let trimmedString = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedString.isEmpty, trimmedString != "<null>" else { return nil }
+        return trimmedString
+    }
+
+    private func transferPresentationModeText(_ mode: BleTransferPresentationMode) -> String {
+        switch mode {
+        case .interactive:
+            return "interactive"
+        case .backgroundShortcut:
+            return "backgroundShortcut"
+        }
     }
 
     func setDitherAlgorithm(_ algorithm: EInkDitherAlgorithm) {
@@ -827,7 +1094,13 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         diagnosticLogs.removeAll()
     }
 
-    func pushWeatherImage(_ image: UIImage, displayImage: UIImage? = nil, toTargetDeviceSnapshot snapshot: WeatherTargetDeviceSnapshot, algorithm: EInkDitherAlgorithm? = nil) async throws -> BleDevice {
+    func pushWeatherImage(
+        _ image: UIImage,
+        displayImage: UIImage? = nil,
+        toTargetDeviceSnapshot snapshot: WeatherTargetDeviceSnapshot,
+        algorithm: EInkDitherAlgorithm? = nil,
+        returnAfterTransferStarted: Bool = false
+    ) async throws -> BleDevice {
         ensureManagerStarted()
         logger.info("开始蓝牙天气推送：targetID=\(snapshot.id, privacy: .public), name=\(snapshot.name, privacy: .public)")
         transferPresentationMode = .backgroundShortcut
@@ -859,6 +1132,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         automatedPushImage = image
         automatedPushDisplayImage = displayImage ?? image
         automatedPushAlgorithm = algorithm
+        automatedReturnPolicy = returnAfterTransferStarted ? .returnAfterTransferStarted : .waitForCompletion
         automatedTargetSnapshot = snapshot
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -866,20 +1140,16 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
             // 后台快捷指令在开始扫描/连接前就申请执行时间，避免尚未传输就被挂起。
             beginTransferBackgroundTask()
 
-            if let device = self.connectedDevice, self.device(device, matches: snapshot), self.isReusableBackgroundDevice(device) {
-                self.logger.info("目标设备当前已连接且句柄较新，直接开始传输。")
+            if let device = self.connectedDevice, self.device(device, matches: snapshot) {
+                self.logger.info("目标设备当前已连接，直接开始传输。")
                 self.startAutomatedTransfer(to: device)
                 return
-            } else if let device = self.connectedDevice, self.device(device, matches: snapshot) {
-                self.logger.notice("目标设备存在本地连接状态，但设备句柄已过期，改为重新扫描。")
             }
 
-            if let device = self.devices.first(where: { self.device($0, matches: snapshot) && self.isReusableBackgroundDevice($0) }) {
-                self.logger.info("使用当前会话里最近扫描到的目标设备，避免后台重新扫描失败。")
+            if let device = self.devices.first(where: { self.device($0, matches: snapshot) }) {
+                self.logger.info("使用当前会话里缓存的目标设备，避免后台重新扫描失败。")
                 self.startAutomatedTransfer(to: device)
                 return
-            } else if self.devices.contains(where: { self.device($0, matches: snapshot) }) {
-                self.logger.notice("当前会话里有目标设备缓存，但扫描时间过旧，改为重新扫描刷新设备句柄。")
             }
 
             // 没有可用缓存时再扫描，后台扫描可能被系统限制。
@@ -909,7 +1179,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
 
         Task { @MainActor in
             let bleDevice = BleDevice(rawDevice: payloadBox.payload)
-            self.recordSeenDevice(bleDevice)
+            self.updateBatteryDisplay(from: bleDevice, source: .live)
 
             if let index = self.devices.firstIndex(where: { $0.id == bleDevice.id }) {
                 self.devices[index] = bleDevice
@@ -966,10 +1236,6 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
 
                 self.currentAddress = address
                 self.currentBlock = block
-                if normalizedPercent > 0 || block > 0 {
-                    self.automatedNoProgressTimeoutTask?.cancel()
-                    self.automatedNoProgressTimeoutTask = nil
-                }
                 // SDK 偶尔会在开始回调后再给一次 0%，UI 进度只前进不回退。
                 let nextProgress = min(max(normalizedPercent, 0), 1)
                 self.transferProgress = max(self.transferProgress, nextProgress)
@@ -978,6 +1244,12 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
                 if percentBucket != self.lastLoggedTransferPercentBucket {
                     self.lastLoggedTransferPercentBucket = percentBucket
                     self.appendDiagnosticLog("传输进度：\(Int(self.transferProgress * 100))% · block \(block)")
+                }
+                if self.transferProgress > 0 || block > 0 {
+                    self.resolveShortcutIntentAfterTransferStartedIfNeeded(
+                        device: self.automatedMatchedDevice ?? self.selectedDevice ?? BleDevice(rawDevice: device),
+                        reason: "收到协议进度/块请求，block \(block)"
+                    )
                 }
                 self.updateLiveTransferActivityIfNeeded()
                 return
@@ -1004,7 +1276,10 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
                 // 只切换到传输中，不再人为显示 1%，避免随后真实 0% 回调造成视觉回跳。
                 self.transferPhase = .transferring
                 self.appendDiagnosticLog("设备开始接收图片")
-                self.startNoProgressWatchdogAfterDeviceReceive()
+                self.updateBackgroundShortcutTransferRecord(
+                    phase: .transferring,
+                    lastEvent: "SDK status=4：设备开始接收，等待 0x05 ACK/进度"
+                )
                 self.updateLiveTransferActivityIfNeeded()
             case 5:
                 guard self.isTransferInProgress else { return }
@@ -1072,7 +1347,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     private func startAutomatedScan(for snapshot: WeatherTargetDeviceSnapshot) {
         logger.info("开始自动扫描设备：\(snapshot.name, privacy: .public)")
         appendDiagnosticLog("开始自动扫描：\(snapshot.name)")
-        updateBackgroundShortcutTransferRecord(phase: .scanning)
+        updateBackgroundShortcutTransferRecord(phase: .scanning, lastEvent: "开始扫描目标设备")
         errorMessage = nil
         automatedMatchedDevice = nil
         devices.removeAll()
@@ -1110,7 +1385,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         }
 
         logger.info("开始自动传输到设备：\(device.name, privacy: .public)")
-        updateBackgroundShortcutTransferRecord(phase: .transferring)
+        updateBackgroundShortcutTransferRecord(phase: .transferring, lastEvent: "命中设备，调用 SDK 进入 0x01/0x02/0x03 准备阶段")
         automatedScanTimeoutTask?.cancel()
         automatedScanTimeoutTask = nil
         automatedMatchedDevice = device
@@ -1137,6 +1412,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         automatedPushImage = nil
         automatedPushDisplayImage = nil
         automatedPushAlgorithm = nil
+        automatedReturnPolicy = .waitForCompletion
         automatedTargetSnapshot = nil
         automatedMatchedDevice = nil
         activeTransferDisplayImage = nil
@@ -1145,8 +1421,6 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         automatedScanTimeoutTask = nil
         automatedTransferTimeoutTask?.cancel()
         automatedTransferTimeoutTask = nil
-        automatedNoProgressTimeoutTask?.cancel()
-        automatedNoProgressTimeoutTask = nil
         // 自动推送由快捷指令驱动，完成或失败时必须释放后台任务和 UI 状态。
         endTransferBackgroundTask()
         transferPresentationMode = .interactive
@@ -1174,6 +1448,17 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         }
     }
 
+    private func resolveShortcutIntentAfterTransferStartedIfNeeded(device: BleDevice, reason: String) {
+        guard transferPresentationMode == .backgroundShortcut else { return }
+        guard automatedReturnPolicy == .returnAfterTransferStarted else { return }
+        guard let continuation = automatedPushContinuation else { return }
+
+        automatedPushContinuation = nil
+        updateBackgroundShortcutTransferRecord(phase: .transferring, lastEvent: "已返回快捷指令：\(reason)")
+        appendDiagnosticLog("快捷指令已返回，后台继续传输：\(reason)", level: .success)
+        continuation.resume(returning: device)
+    }
+
     private func resetAutomatedPushStateForInteractiveTransfer() {
         guard hasAutomatedPush || transferPresentationMode != .interactive else { return }
 
@@ -1188,30 +1473,13 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         automatedScanTimeoutTask = nil
         automatedTransferTimeoutTask?.cancel()
         automatedTransferTimeoutTask = nil
-        automatedNoProgressTimeoutTask?.cancel()
-        automatedNoProgressTimeoutTask = nil
         endLiveTransferActivityIfNeeded(finalPhaseTitle: "传输取消")
         endTransferBackgroundTask()
         transferPresentationMode = .interactive
     }
 
-    private func startNoProgressWatchdogAfterDeviceReceive() {
-        guard transferPresentationMode == .backgroundShortcut, hasAutomatedPush else { return }
-        guard transferProgress <= 0, currentBlock <= 0 else { return }
-
-        automatedNoProgressTimeoutTask?.cancel()
-        automatedNoProgressTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 12_000_000_000)
-            guard let self, self.hasAutomatedPush else { return }
-            guard self.transferProgress <= 0, self.currentBlock <= 0 else { return }
-            self.logger.error("设备开始接收后没有返回真实进度，结束后台推送。")
-            self.appendDiagnosticLog("后台传输卡在设备接收阶段，未收到真实进度", level: .error)
-            self.finishAutomatedPush(with: .failure(BleTransferError.transferNoProgressAfterReceive))
-        }
-    }
-
     private func freshestDevice(for device: BleDevice) -> BleDevice {
-        if let scannedDevice = devices.first(where: { $0.id == device.id && isReusableBackgroundDevice($0) }) {
+        if let scannedDevice = devices.first(where: { $0.id == device.id }) {
             return scannedDevice
         }
 
@@ -1224,22 +1492,6 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         }
 
         return device
-    }
-
-    private func isSDKTransferDeviceReady(_ device: BleDevice) -> Bool {
-        // PickBleManager 传图依赖扫描回调里的 CBPeripheral；缺失时 SDK 内部组 NSDictionary 会崩。
-        device.rawDevice["device"] != nil
-    }
-
-    private func recordSeenDevice(_ device: BleDevice) {
-        // 后台传输必须尽量使用刚扫描到的 CBPeripheral 句柄，旧句柄容易连接后没有进度回调。
-        lastSeenDeviceDates[device.id] = Date()
-    }
-
-    private func isReusableBackgroundDevice(_ device: BleDevice) -> Bool {
-        guard transferPresentationMode == .backgroundShortcut else { return true }
-        guard let lastSeenAt = lastSeenDeviceDates[device.id] else { return false }
-        return Date().timeIntervalSince(lastSeenAt) <= 20
     }
 
     private func device(_ device: BleDevice, matches snapshot: WeatherTargetDeviceSnapshot) -> Bool {
@@ -1358,10 +1610,14 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     }
 
     private func handleBackgroundTaskExpired() {
-        // 供应商 SDK 不是可恢复的原生 CoreBluetooth 会话；后台到期且没有真实进度时继续等待只会卡在 0%。
+        // 调试分支：后台时间到期先不立刻判失败，继续观察 CoreBluetooth/SDK 是否还会补回真实进度。
         if transferProgress <= 0, currentBlock <= 0 {
-            logger.error("UIKit 后台执行时间到期，SDK 未产生传输进度，结束后台推送。")
-            finishAutomatedPush(with: .failure(BleTransferError.backgroundTimeExpired))
+            logger.error("UIKit 后台执行时间到期，SDK 暂无真实进度，继续等待总超时。")
+            appendDiagnosticLog("后台时间到期但继续等待 SDK 回调", level: .warning)
+            updateBackgroundShortcutTransferRecord(
+                phase: .transferring,
+                lastEvent: "UIKit 后台时间到期，继续等待 SDK/协议进度"
+            )
             return
         }
 
@@ -1377,6 +1633,78 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
 #endif
 
 private extension BleTransferService {
+    func beginBatteryRefreshWindow() {
+        restoreDisplayedBatteryFromCache(for: connectedDevice ?? selectedDevice)
+        batteryRefreshGeneration += 1
+        let generation = batteryRefreshGeneration
+
+        batteryRefreshTimeoutTask?.cancel()
+        batteryRefreshTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self, !Task.isCancelled, self.batteryRefreshGeneration == generation else { return }
+            guard self.batteryDisplayState != .live else { return }
+
+            self.displayedBatteryPercent = nil
+            self.batteryDisplayState = .empty
+            self.appendDiagnosticLog("本次扫描 6 秒内未获取到有效电量，首页显示空白电池图标", level: .warning)
+        }
+    }
+
+    func restoreDisplayedBatteryFromCache(for device: BleDevice? = nil) {
+        let preferredDeviceID = device?.id
+            ?? connectedDevice?.id
+            ?? selectedDevice?.id
+            ?? DeviceBatteryCacheStore.lastDeviceID
+
+        guard let preferredDeviceID,
+              let snapshot = lastBatteryByDeviceID[preferredDeviceID] else {
+            displayedBatteryPercent = nil
+            batteryDisplayState = .empty
+            return
+        }
+
+        displayedBatteryPercent = snapshot.percent
+        batteryDisplayState = .cached
+        appendDiagnosticLog("读取缓存电量：device=\(preferredDeviceID)，percent=\(snapshot.percent)%")
+    }
+
+    func updateBatteryDisplay(from device: BleDevice?, source: BatteryDisplayState) {
+        guard let device, let percent = device.batteryPercent else { return }
+
+        let clampedPercent = min(100, max(0, percent))
+        let oldSnapshot = lastBatteryByDeviceID[device.id]
+        let voltageChanged: Bool
+        if let oldVoltage = oldSnapshot?.voltage, let newVoltage = device.batteryVoltage {
+            voltageChanged = abs(oldVoltage - newVoltage) > 0.001
+        } else {
+            voltageChanged = oldSnapshot?.voltage != nil || device.batteryVoltage != nil
+        }
+        let shouldLog = oldSnapshot?.percent != clampedPercent || voltageChanged
+
+        let snapshot = DeviceBatterySnapshot(
+            deviceID: device.id,
+            percent: clampedPercent,
+            voltage: device.batteryVoltage,
+            updatedAt: Date()
+        )
+        lastBatteryByDeviceID[device.id] = snapshot
+        DeviceBatteryCacheStore.save(lastBatteryByDeviceID)
+        DeviceBatteryCacheStore.lastDeviceID = device.id
+
+        let activeDeviceID = connectedDevice?.id ?? selectedDevice?.id
+        let shouldApplyToHome = activeDeviceID == nil || activeDeviceID == device.id
+        if shouldApplyToHome {
+            displayedBatteryPercent = clampedPercent
+            batteryDisplayState = source
+            batteryRefreshGeneration += 1
+        }
+
+        if shouldLog {
+            let voltageText = device.batteryVoltage.map { String(format: "%.2fV", $0) } ?? "nil"
+            appendDiagnosticLog("电量更新：device=\(device.id)，name=\(device.name)，voltage=\(voltageText)，percent=\(clampedPercent)%")
+        }
+    }
+
     static func loadBackgroundShortcutTransferRecord() -> BackgroundShortcutTransferRecord? {
         guard let data = UserDefaults.standard.data(forKey: BleDiagnosticsStorage.backgroundShortcutTransferKey) else {
             return nil
@@ -1390,6 +1718,7 @@ private extension BleTransferService {
             targetDeviceID: snapshot.id,
             targetDeviceName: snapshot.name,
             phase: .preparing,
+            lastEvent: "准备后台快捷指令任务",
             startedAt: Date(),
             finishedAt: nil,
             errorMessage: nil
@@ -1401,10 +1730,14 @@ private extension BleTransferService {
     func updateBackgroundShortcutTransferRecord(
         phase: BackgroundShortcutTransferPhase,
         errorMessage: String? = nil,
+        lastEvent: String? = nil,
         finish: Bool = false
     ) {
         guard var record = lastBackgroundShortcutTransfer else { return }
         record.phase = phase
+        if let lastEvent {
+            record.lastEvent = lastEvent
+        }
         record.errorMessage = errorMessage
         if finish {
             record.finishedAt = Date()
