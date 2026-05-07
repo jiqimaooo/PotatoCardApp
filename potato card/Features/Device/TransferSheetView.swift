@@ -50,10 +50,14 @@ struct TransferSheetView: View {
 
                 adjustmentSection
                 algorithmSection
-                transferSection
             }
             .formStyle(.grouped)
             .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // iOS 26 标准“主操作浮动底栏”模式：背景走系统 .bar 材质，
+                // 主按钮使用 borderedProminent + 子胶囊形状，填满安全区并保留底部 padding。
+                bottomActionBar
+            }
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 loadInitialStateIfNeeded()
@@ -222,25 +226,28 @@ struct TransferSheetView: View {
         .disabled(isTransferInProgress)
     }
 
-    // MARK: - Transfer Section
+    // MARK: - Bottom Action Bar
 
-    private var transferSection: some View {
-        Section {
+    // 浮动底栏：状态 / 进度 上方顯示，下方是主按钮。
+    // 参考 iOS 26 “邮箱 / 提醒事项 / 预订设备”面板的主操作样式。
+    private var bottomActionBar: some View {
+        VStack(spacing: 10) {
             if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
                     .foregroundStyle(.red)
-                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if isTransferInProgress {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(spacing: 6) {
                     HStack {
                         Text(bleService.transferPhase.title)
-                            .font(.subheadline)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                         Spacer()
                         Text("\(Int(bleService.transferProgress * 100))%")
-                            .font(.subheadline.monospacedDigit())
+                            .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                     ProgressView(value: bleService.transferProgress)
@@ -249,7 +256,7 @@ struct TransferSheetView: View {
 
             Button {
                 guard let device = activeDevice else { return }
-                // 点击下方按钮同时完成“保存 + 传输”，即使传输中途失败也能保留调整。
+                // 点击主按钮同时完成“保存 + 传输”，即使传输中途失败也能保留调整。
                 saveEditStateIfNeeded()
                 bleService.transfer(
                     image: transferImage,
@@ -259,12 +266,18 @@ struct TransferSheetView: View {
                 )
             } label: {
                 Label("保存并传输到设备", systemImage: "paperplane.fill")
-                    .frame(maxWidth: .infinity)
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 28)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .disabled(activeDevice == nil || isTransferInProgress)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.bar)
     }
 
     // MARK: - Slider Row
