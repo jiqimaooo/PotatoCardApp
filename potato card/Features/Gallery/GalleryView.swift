@@ -42,7 +42,8 @@ struct GalleryView: View {
             GalleryImageViewer(
                 photos: set.photos,
                 initialIndex: set.initialIndex,
-                onTransferToDevice: onTransferToDevice
+                onTransferToDevice: onTransferToDevice,
+                onRenamePhoto: handleRenamePhoto
             )
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
@@ -181,6 +182,22 @@ struct GalleryView: View {
         TransferEditStateStore.delete(for: .gallery(photo.id))
     }
 
+    // 从二级 Sheet 收到重命名后：实时更新内存里的列表，同时写回磁盘索引。
+    private func handleRenamePhoto(id: UUID, newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let index = photos.firstIndex(where: { $0.id == id }) else { return }
+        let existing = photos[index]
+        guard existing.title != trimmed else { return }
+        photos[index] = GalleryPhoto(
+            id: existing.id,
+            imageData: existing.imageData,
+            image: existing.image,
+            title: trimmed
+        )
+        GalleryCacheStore.renamePhoto(id: id, to: trimmed)
+    }
+
     private var primaryTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.92)
     }
@@ -218,6 +235,8 @@ private struct GalleryImageViewer: View {
     let photos: [GalleryPhoto]
     let initialIndex: Int
     let onTransferToDevice: (Data) -> Void
+    // 由外层 GalleryView 提供，收到“修改名称”后同步到上层状态。
+    var onRenamePhoto: ((UUID, String) -> Void)? = nil
 
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
@@ -228,11 +247,19 @@ private struct GalleryImageViewer: View {
     @State private var pendingTransferImage: UIImage?
     // 记录哪些照片已保存了“手动调整”状态，用来驱动预览与“手动调整”按钮的黄色指示。
     @State private var customizedPhotoIDs: Set<UUID> = []
+    // 在 sheet 里修改过名称后本地缓存，只读走外层 photos 会丢掉变更。
+    @State private var renamedTitles: [UUID: String] = [:]
 
-    init(photos: [GalleryPhoto], initialIndex: Int, onTransferToDevice: @escaping (Data) -> Void) {
+    init(
+        photos: [GalleryPhoto],
+        initialIndex: Int,
+        onTransferToDevice: @escaping (Data) -> Void,
+        onRenamePhoto: ((UUID, String) -> Void)? = nil
+    ) {
         self.photos = photos
         self.initialIndex = initialIndex
         self.onTransferToDevice = onTransferToDevice
+        self.onRenamePhoto = onRenamePhoto
         _selectedIndex = State(initialValue: initialIndex)
     }
 
@@ -296,11 +323,17 @@ private struct GalleryImageViewer: View {
             .sheet(item: $transferRequest) { request in
                 TransferSheetView(
                     sourceImage: request.photo.image,
-                    title: request.photo.title,
+                    title: renamedTitles[request.photo.id] ?? request.photo.title,
                     editStateKey: .gallery(request.photo.id),
                     onTransferSucceeded: {
                         onTransferToDevice(request.photo.imageData)
                         dismiss()
+                    },
+                    onRename: onRenamePhoto.map { rename in
+                        { newTitle in
+                            renamedTitles[request.photo.id] = newTitle
+                            rename(request.photo.id, newTitle)
+                        }
                     }
                 )
                 .presentationDetents([.large])
@@ -471,7 +504,7 @@ private struct GalleryImageViewer: View {
 
 // MARK: - 单张图片应用手动调整后的预览
 
-// 复用 EInkDevicePreview 的几何公式，把 source image 按 (scale, offsetX, offsetY) 渲染到目标 screen 区域。
+// 复用 EInkDevicePreview 的几何公式，把 source image 按 (scale, rotation, offsetX, offsetY) 渲染到目标 screen 区域。
 // 不做抖动，保留为彩色预览即可，用户在“一级”预览页面只需要看到布局；真正的传输图仍然走 EInkImageRenderer。
 private struct AdjustedPhotoPreview: View {
     let image: UIImage
@@ -481,39 +514,20 @@ private struct AdjustedPhotoPreview: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let drawRect = previewDrawRect(in: proxy.size)
+            let baseScale = max(proxy.size.width / image.size.width, proxy.size.height / image.size.height)
+            let offsetScale = min(proxy.size.width / renderTargetSize.width, proxy.size.height / renderTargetSize.height)
+
             Image(uiImage: image)
                 .resizable()
                 .interpolation(.medium)
-                .frame(width: drawRect.width, height: drawRect.height)
-                .position(x: drawRect.midX, y: drawRect.midY)
+                .frame(width: image.size.width * baseScale, height: image.size.height * baseScale)
+                .scaleEffect(adjustment.scale)
+                .rotationEffect(.radians(Double(adjustment.rotation)))
+                .offset(x: adjustment.offsetX * offsetScale, y: adjustment.offsetY * offsetScale)
+                .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .frame(width: screenSize.width, height: screenSize.height)
         .clipped()
-    }
-
-    private func previewDrawRect(in targetSize: CGSize) -> CGRect {
-        let imageSize = image.size
-        guard imageSize.width > 0, imageSize.height > 0 else {
-            return CGRect(origin: .zero, size: targetSize)
-        }
-        let baseScale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
-        let manualScale = adjustment.scale
-        let finalSize = CGSize(
-            width: imageSize.width * baseScale * manualScale,
-            height: imageSize.height * baseScale * manualScale
-        )
-        // adjustment.offset 是按设备真实像素填的，预览时按比例缩放回 SwiftUI 坐标系。
-        let offsetScale = min(targetSize.width / renderTargetSize.width, targetSize.height / renderTargetSize.height)
-        let offset = CGSize(
-            width: adjustment.offsetX * offsetScale,
-            height: adjustment.offsetY * offsetScale
-        )
-        let origin = CGPoint(
-            x: (targetSize.width - finalSize.width) / 2 + offset.width,
-            y: (targetSize.height - finalSize.height) / 2 + offset.height
-        )
-        return CGRect(origin: origin, size: finalSize)
     }
 }
 

@@ -71,6 +71,25 @@ enum GalleryCacheStore {
         try? saveEntries(entries)
     }
 
+    // 仅修改标题，不改动 id 和已缓存的图片文件，调用方可以放心继续按 id 查找。
+    @discardableResult
+    nonisolated static func renamePhoto(id: UUID, to newTitle: String) -> Bool {
+        var entries = loadEntries()
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return false }
+
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, entries[index].title != trimmed else { return false }
+
+        let entry = entries[index]
+        entries[index] = GalleryCacheEntry(id: entry.id, fileName: entry.fileName, title: trimmed)
+        do {
+            try saveEntries(entries)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     nonisolated private static func loadEntries() -> [GalleryCacheEntry] {
         guard
             let data = try? Data(contentsOf: indexFileURL),

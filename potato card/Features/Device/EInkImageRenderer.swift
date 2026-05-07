@@ -20,6 +20,8 @@ struct EInkManualAdjustment: Equatable {
     var scale: CGFloat = 1
     var offsetX: CGFloat = 0
     var offsetY: CGFloat = 0
+    // 旋转角度（弧度），绕图片中心转动。
+    var rotation: CGFloat = 0
 
     static let `default` = EInkManualAdjustment()
 }
@@ -86,8 +88,22 @@ enum EInkImageRenderer {
                 fitMode: fitMode,
                 adjustment: adjustment
             )
-            // 直接绘制到目标尺寸，避免先把 iPhone 原图完整解码成超大位图。
-            image.draw(in: drawRect)
+
+            // 只在“手动调整”模式下应用旋转，避免给 .centerCrop 加上不期望的变换。
+            // 绕画布中心转动 -> drawRect 仍以未旋转的坐标计算，与预览中 .rotationEffect 的默认锤点保持一致。
+            let rotation = fitMode == .manual ? adjustment.rotation : 0
+            if rotation != 0 {
+                let cgContext = context.cgContext
+                cgContext.saveGState()
+                cgContext.translateBy(x: targetSize.width / 2, y: targetSize.height / 2)
+                cgContext.rotate(by: rotation)
+                cgContext.translateBy(x: -targetSize.width / 2, y: -targetSize.height / 2)
+                image.draw(in: drawRect)
+                cgContext.restoreGState()
+            } else {
+                // 直接绘制到目标尺寸，避免先把 iPhone 原图完整解码成超大位图。
+                image.draw(in: drawRect)
+            }
         }
     }
 
