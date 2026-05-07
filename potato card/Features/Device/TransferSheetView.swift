@@ -42,6 +42,15 @@ struct TransferSheetView: View {
                         dismiss()
                     }
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("保存") {
+                        saveEditStateIfNeeded()
+                        dismiss()
+                    }
+                    .font(.system(size: 16, weight: .semibold))
+                    .disabled(editStateKey == nil || bleService.transferPhase == .transferring || bleService.transferPhase == .preparing)
+                }
             }
             .onChange(of: bleService.transferPhase) { _, phase in
                 if phase == .succeeded {
@@ -86,6 +95,8 @@ struct TransferSheetView: View {
 
             Button {
                 guard let device = activeDevice else { return }
+                // 点击下方按钮同时完成“保存 + 传输”，即使传输中途失败也能保留调整。
+                saveEditStateIfNeeded()
                 bleService.transfer(
                     image: transferImage,
                     displayImage: displayImage,
@@ -93,7 +104,7 @@ struct TransferSheetView: View {
                     algorithm: selectedDitherAlgorithm
                 )
             } label: {
-                Label("传输到设备", systemImage: "paperplane.fill")
+                Label("保存并传输到设备", systemImage: "paperplane.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -185,6 +196,11 @@ struct TransferSheetView: View {
 
             Button {
                 adjustment = .default
+                // 重置后立即清除持久化状态，这样即使用户不点保存、直接关闭面板，
+                // 一级页面上的“手动调整”黄色标记也能同步恢复原状。
+                if let editStateKey {
+                    TransferEditStateStore.delete(for: editStateKey)
+                }
             } label: {
                 Label("重置", systemImage: "arrow.counterclockwise")
             }
@@ -214,7 +230,12 @@ struct TransferSheetView: View {
 
     private func saveEditStateIfNeeded() {
         guard let editStateKey else { return }
-        TransferEditStateStore.save(adjustment, for: editStateKey)
+        // 默认值不需要持久化，直接删除记录，避免一级页面“黄色”标记误点亮。
+        if adjustment == .default {
+            TransferEditStateStore.delete(for: editStateKey)
+        } else {
+            TransferEditStateStore.save(adjustment, for: editStateKey)
+        }
     }
 
     private func sectionHeader(_ title: String) -> some View {

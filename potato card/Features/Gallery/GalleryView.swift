@@ -226,6 +226,8 @@ private struct GalleryImageViewer: View {
     @State private var transferRequest: GalleryTransferRequest?
     @State private var pendingTransferData: Data?
     @State private var pendingTransferImage: UIImage?
+    // 记录哪些照片已保存了“手动调整”状态，用来驱动预览与“手动调整”按钮的黄色指示。
+    @State private var customizedPhotoIDs: Set<UUID> = []
 
     init(photos: [GalleryPhoto], initialIndex: Int, onTransferToDevice: @escaping (Data) -> Void) {
         self.photos = photos
@@ -274,12 +276,14 @@ private struct GalleryImageViewer: View {
                         Button(action: openManualAdjustment) {
                             Text("手动调整")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(secondaryTextColor)
+                                .foregroundStyle(currentPhotoIsCustomized ? Color.black : secondaryTextColor)
                                 .padding(.horizontal, 16)
                                 .frame(height: 36)
                                 .background(
                                     Capsule(style: .continuous)
-                                        .fill(buttonFillColor.opacity(0.72))
+                                        // 非默认状态使用 systemYellow（Apple HIG 黄色诡调色）
+                                        // 提示该照片已被手动调整过，点重置后会恢复原色。
+                                        .fill(currentPhotoIsCustomized ? Color(uiColor: .systemYellow) : buttonFillColor.opacity(0.72))
                                 )
                         }
                         .buttonStyle(.plain)
@@ -301,6 +305,13 @@ private struct GalleryImageViewer: View {
                 )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+            }
+            .onChange(of: transferRequest?.id) { _, _ in
+                // sheet 打开/关闭后重新加载调整状态，让一级页面的预览和黄色指示同步更新。
+                refreshCustomizedPhotoIDs()
+            }
+            .task {
+                refreshCustomizedPhotoIDs()
             }
             .onChange(of: bleService.transferPhase) { _, phase in
                 guard phase == .succeeded, let data = pendingTransferData else { return }
@@ -344,8 +355,12 @@ private struct GalleryImageViewer: View {
         guard let device = activeDevice else { return }
 
         let photo = photos[selectedIndex]
-        let transferImage = defaultTransferImage(from: photo.image, device: device)
-        let displayImage = defaultDisplayImage(from: photo.image, device: device)
+        // 传输这张照片时默认也要使用用户保存过的“手动调整”，跟预览保持一致。
+        let savedAdjustment = TransferEditStateStore.load(for: .gallery(photo.id))
+        let adjustment = savedAdjustment ?? .default
+        let fitMode: EInkImageFitMode = (savedAdjustment != nil && adjustment != .default) ? .manual : .centerCrop
+        let transferImage = transferImage(from: photo.image, device: device, fitMode: fitMode, adjustment: adjustment)
+        let displayImage = displayImage(from: photo.image, device: device, fitMode: fitMode, adjustment: adjustment)
         pendingTransferData = photo.imageData
         pendingTransferImage = displayImage
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
@@ -357,23 +372,33 @@ private struct GalleryImageViewer: View {
         transferRequest = GalleryTransferRequest(photo: photos[selectedIndex])
     }
 
-    private func defaultTransferImage(from image: UIImage, device: BleDevice) -> UIImage {
+    private func transferImage(
+        from image: UIImage,
+        device: BleDevice,
+        fitMode: EInkImageFitMode,
+        adjustment: EInkManualAdjustment
+    ) -> UIImage {
         EInkImageRenderer.renderForTransfer(
             image: image,
             targetSize: device.profile.pixelSize,
-            fitMode: .centerCrop,
-            adjustment: .default,
+            fitMode: fitMode,
+            adjustment: adjustment,
             profile: device.profile,
             ditherAlgorithm: bleService.ditherAlgorithm
         )
     }
 
-    private func defaultDisplayImage(from image: UIImage, device: BleDevice) -> UIImage {
+    private func displayImage(
+        from image: UIImage,
+        device: BleDevice,
+        fitMode: EInkImageFitMode,
+        adjustment: EInkManualAdjustment
+    ) -> UIImage {
         EInkImageRenderer.render(
             image: image,
             targetSize: device.profile.pixelSize,
-            fitMode: .centerCrop,
-            adjustment: .default
+            fitMode: fitMode,
+            adjustment: adjustment
         )
     }
 
@@ -389,13 +414,12 @@ private struct GalleryImageViewer: View {
         ZStack {
             TabView(selection: $selectedIndex) {
                 ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                    GeometryReader { proxy in
-                        Image(uiImage: photo.image)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipped()
-                    }
+                    AdjustedPhotoPreview(
+                        image: photo.image,
+                        adjustment: savedAdjustment(for: photo),
+                        screenSize: CGSize(width: 186, height: 280),
+                        renderTargetSize: renderTargetSize
+                    )
                     .frame(width: 186, height: 280)
                     .tag(index)
                 }
@@ -417,6 +441,79 @@ private struct GalleryImageViewer: View {
         }
         .frame(width: 220, height: 352)
         .offset(y: -60)
+    }
+
+    private var renderTargetSize: CGSize {
+        activeDevice?.profile.pixelSize ?? EInkDeviceProfile.fallback.pixelSize
+    }
+
+    private var currentPhotoIsCustomized: Bool {
+        guard photos.indices.contains(selectedIndex) else { return false }
+        return customizedPhotoIDs.contains(photos[selectedIndex].id)
+    }
+
+    // 加载某张照片对应的“手动调整”状态；缺省值代表没有自定义。
+    private func savedAdjustment(for photo: GalleryPhoto) -> EInkManualAdjustment {
+        TransferEditStateStore.load(for: .gallery(photo.id)) ?? .default
+    }
+
+    private func refreshCustomizedPhotoIDs() {
+        let customized = photos.compactMap { photo -> UUID? in
+            guard let saved = TransferEditStateStore.load(for: .gallery(photo.id)),
+                  saved != .default else {
+                return nil
+            }
+            return photo.id
+        }
+        customizedPhotoIDs = Set(customized)
+    }
+}
+
+// MARK: - 单张图片应用手动调整后的预览
+
+// 复用 EInkDevicePreview 的几何公式，把 source image 按 (scale, offsetX, offsetY) 渲染到目标 screen 区域。
+// 不做抖动，保留为彩色预览即可，用户在“一级”预览页面只需要看到布局；真正的传输图仍然走 EInkImageRenderer。
+private struct AdjustedPhotoPreview: View {
+    let image: UIImage
+    let adjustment: EInkManualAdjustment
+    let screenSize: CGSize
+    let renderTargetSize: CGSize
+
+    var body: some View {
+        GeometryReader { proxy in
+            let drawRect = previewDrawRect(in: proxy.size)
+            Image(uiImage: image)
+                .resizable()
+                .interpolation(.medium)
+                .frame(width: drawRect.width, height: drawRect.height)
+                .position(x: drawRect.midX, y: drawRect.midY)
+        }
+        .frame(width: screenSize.width, height: screenSize.height)
+        .clipped()
+    }
+
+    private func previewDrawRect(in targetSize: CGSize) -> CGRect {
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return CGRect(origin: .zero, size: targetSize)
+        }
+        let baseScale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
+        let manualScale = adjustment.scale
+        let finalSize = CGSize(
+            width: imageSize.width * baseScale * manualScale,
+            height: imageSize.height * baseScale * manualScale
+        )
+        // adjustment.offset 是按设备真实像素填的，预览时按比例缩放回 SwiftUI 坐标系。
+        let offsetScale = min(targetSize.width / renderTargetSize.width, targetSize.height / renderTargetSize.height)
+        let offset = CGSize(
+            width: adjustment.offsetX * offsetScale,
+            height: adjustment.offsetY * offsetScale
+        )
+        let origin = CGPoint(
+            x: (targetSize.width - finalSize.width) / 2 + offset.width,
+            y: (targetSize.height - finalSize.height) / 2 + offset.height
+        )
+        return CGRect(origin: origin, size: finalSize)
     }
 }
 
