@@ -54,6 +54,26 @@ struct PotatoCardShortcutsProvider: AppShortcutsProvider {
                 ],
                 shortTitle: "天气推送",
                 systemImageName: "cloud.sun.bolt"
+            ),
+            AppShortcut(
+                intent: PushImageToCardIntent(),
+                phrases: [
+                    "用\(.applicationName)推送图片",
+                    "把图片发到\(.applicationName)",
+                    "\(.applicationName)推送图片到土豆片"
+                ],
+                shortTitle: "推送图片到土豆片",
+                systemImageName: "photo.on.rectangle.angled"
+            ),
+            AppShortcut(
+                intent: PushTextToCardIntent(),
+                phrases: [
+                    "用\(.applicationName)推送文字",
+                    "把文字发到\(.applicationName)",
+                    "\(.applicationName)推送文字到土豆片"
+                ],
+                shortTitle: "推送文字到土豆片",
+                systemImageName: "text.alignleft"
             )
         ]
     }
