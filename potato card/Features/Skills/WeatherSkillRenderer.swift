@@ -53,7 +53,9 @@ enum WeatherSkillRenderer {
         static let wind = UIColor(red: 0.39, green: 0.57, blue: 0.88, alpha: 1)
         static let thunder = UIColor(red: 0.97, green: 0.79, blue: 0.10, alpha: 1)
         static let aqiGreen = UIColor(red: 0.35, green: 0.58, blue: 0.21, alpha: 1)
-        static let aqiYellow = UIColor(red: 0.95, green: 0.78, blue: 0.07, alpha: 1)
+        // AQI “良” 原本是亮黄 #F2C712，在米色背景 + 墨水屏上几乎不可见。
+        // 改为深琥珀/暗金，保留“黄色警示”语义的同时大幅提高对比度，白字徽章也能读清。
+        static let aqiYellow = UIColor(red: 0.62, green: 0.45, blue: 0.06, alpha: 1)
         static let aqiOrange = UIColor(red: 0.93, green: 0.48, blue: 0.10, alpha: 1)
         static let aqiRed = UIColor(red: 0.88, green: 0.16, blue: 0.16, alpha: 1)
         static let aqiPurple = UIColor(red: 0.58, green: 0.20, blue: 0.52, alpha: 1)
@@ -1289,12 +1291,19 @@ enum WeatherSkillRenderer {
             return Palette.aqiGreen
         }
 
-        return UIColor(
-            red: CGFloat((value >> 16) & 0xFF) / 255,
-            green: CGFloat((value >> 8) & 0xFF) / 255,
-            blue: CGFloat(value & 0xFF) / 255,
-            alpha: 1
-        )
+        let red = CGFloat((value >> 16) & 0xFF) / 255
+        let green = CGFloat((value >> 8) & 0xFF) / 255
+        let blue = CGFloat(value & 0xFF) / 255
+
+        // 和风 API 在 AQI “良” 区间返回亮黄色（如 #FFFF00 / #F5C13E），
+        // 在米色背景的墨水屏上几乎看不见，这里统一映射到调色板里的深琥珀色，
+        // 保证 AQI 大数字、身份徽章和底部色带的黄色档位保持一致。
+        // 条件：R/G 均偏高且接近、B 偏低，排除橙色（G/R 明显偏低）。
+        if red >= 0.80, blue <= 0.40, green / max(red, 0.0001) >= 0.70 {
+            return Palette.aqiYellow
+        }
+
+        return UIColor(red: red, green: green, blue: blue, alpha: 1)
     }
 
     private static let timeFormatter: DateFormatter = {
