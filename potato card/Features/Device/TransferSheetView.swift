@@ -11,7 +11,6 @@ struct TransferSheetView: View {
 
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
     @State private var adjustment = EInkManualAdjustment.default
     @State private var selectedDitherAlgorithm: EInkDitherAlgorithm = .floydSteinberg
     @State private var didLoadInitialState = false
@@ -38,20 +37,23 @@ struct TransferSheetView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                backgroundColor.ignoresSafeArea()
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 20) {
-                        interactivePreview
-                        adjustmentSection
-                        algorithmSection
-                        transferSection
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 18)
+            // 整体改用 Form + 分组样式，与系统“设置 / 照片”等编辑面板一致，
+            // 自动跟随暗色模式、动态字体与无障碍设置，不再手写一套配色。
+            Form {
+                Section {
+                    interactivePreview
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 320)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
+
+                adjustmentSection
+                algorithmSection
+                transferSection
             }
+            .formStyle(.grouped)
+            .scrollDismissesKeyboard(.interactively)
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 loadInitialStateIfNeeded()
@@ -72,8 +74,8 @@ struct TransferSheetView: View {
                         saveEditStateIfNeeded()
                         dismiss()
                     }
-                    .font(.system(size: 16, weight: .semibold))
-                    .disabled(editStateKey == nil || bleService.transferPhase == .transferring || bleService.transferPhase == .preparing)
+                    .fontWeight(.semibold)
+                    .disabled(editStateKey == nil || isTransferInProgress)
                 }
             }
             .alert("修改图片名称", isPresented: $isRenaming) {
@@ -99,31 +101,31 @@ struct TransferSheetView: View {
         }
     }
 
+    // MARK: - Toolbar Title
+
     // 顶部标题栏：标题 + 编辑图标。只有调用方传入 onRename 时才显示笔形图标。
     private var titleBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Text(displayTitle)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(primaryTextColor)
+                .font(.headline)
                 .lineLimit(1)
 
             if onRename != nil {
-                Button {
+                Button("修改名称", systemImage: "pencil") {
                     renameDraft = displayTitle
                     isRenaming = true
-                } label: {
-                    Image(systemName: "pencil.circle")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(accentColor)
                 }
-                .buttonStyle(.plain)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
                 .accessibilityLabel("修改图片名称")
             }
         }
     }
 
-    // 上方的“土豆片”预览：支持双指缩放、旋转、单/双指拖动；变化实时反馈到下方的滑动条。
-    // 不再单独占一个 “预览” section header，让整个面板视觉更紧凑。
+    // MARK: - Preview
+
+    // 上方的“土豆片”预览：支持双指缩放、旋转、单/双指拖动；变化实时反馈到下方滑动条。
     private var interactivePreview: some View {
         InteractiveDevicePreview(
             sourceImage: sourceImage,
@@ -131,23 +133,118 @@ struct TransferSheetView: View {
             renderTargetSize: renderTargetSize,
             isInteractive: !isTransferInProgress
         )
-        .frame(maxWidth: .infinity)
-        .frame(height: 330)
     }
 
+    // MARK: - Manual Adjustment Section
+
+    // 用原生 DisclosureGroup 替换之前的 Button + chevron 自绘组合，跟随系统的展开动画与暗色模式。
+    // 重置图标内嵌在 label 右侧，仅在非默认状态显示。
+    private var adjustmentSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $isAdjustmentExpanded) {
+                sliderRow(title: "缩放", value: $adjustment.scale, range: 0.25...3, format: scalePercent)
+                sliderRow(title: "旋转", value: $adjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+                sliderRow(title: "水平", value: $adjustment.offsetX, range: -160...160, format: offsetText)
+                sliderRow(title: "垂直", value: $adjustment.offsetY, range: -160...160, format: offsetText)
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("手动调整")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(adjustmentSummary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if adjustment != .default {
+                        Button("重置", systemImage: "arrow.counterclockwise", action: resetAdjustment)
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("重置手动调整")
+                            .disabled(isTransferInProgress)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Algorithm Section
+
+    private var algorithmSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $isAlgorithmExpanded) {
+                ForEach(EInkDitherAlgorithm.allCases) { algorithm in
+                    algorithmRow(algorithm)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("图像算法")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(selectedDitherAlgorithm.title)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func algorithmRow(_ algorithm: EInkDitherAlgorithm) -> some View {
+        Button {
+            selectedDitherAlgorithm = algorithm
+            bleService.setDitherAlgorithm(algorithm)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(algorithm.title)
+                        .foregroundStyle(.primary)
+                    Text(algorithm.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if selectedDitherAlgorithm == algorithm {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isTransferInProgress)
+    }
+
+    // MARK: - Transfer Section
+
     private var transferSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Section {
             if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 13, weight: .semibold))
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
+                    .font(.subheadline)
             }
 
             if isTransferInProgress {
-                ProgressView(value: bleService.transferProgress)
-                Text("\(bleService.transferPhase.title) \(Int(bleService.transferProgress * 100))%")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(secondaryTextColor)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(bleService.transferPhase.title)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(bleService.transferProgress * 100))%")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: bleService.transferProgress)
+                }
             }
 
             Button {
@@ -165,162 +262,33 @@ struct TransferSheetView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(activeDevice == nil || isTransferInProgress)
         }
     }
 
-    private var algorithmSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    isAlgorithmExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("图像算法")
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
-                            .foregroundStyle(primaryTextColor)
+    // MARK: - Slider Row
 
-                        Text(selectedDitherAlgorithm.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(secondaryTextColor)
-                    }
-
-                    Spacer()
-
-                    Image(systemName: isAlgorithmExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(secondaryTextColor)
-                }
-            }
-            .buttonStyle(.plain)
-
-            if isAlgorithmExpanded {
-                VStack(spacing: 8) {
-                    ForEach(EInkDitherAlgorithm.allCases) { algorithm in
-                        algorithmRow(algorithm)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    private func algorithmRow(_ algorithm: EInkDitherAlgorithm) -> some View {
-        Button {
-            selectedDitherAlgorithm = algorithm
-            bleService.setDitherAlgorithm(algorithm)
-        } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(algorithm.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(primaryTextColor)
-
-                    Text(algorithm.subtitle)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(secondaryTextColor)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                if selectedDitherAlgorithm == algorithm {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(accentColor)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(selectedDitherAlgorithm == algorithm ? selectedAlgorithmFillColor : rowFillColor)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(isTransferInProgress)
-    }
-
-    // 手动调整改造为可折叠的下拉菜单，结构和图像算法保持一致；重置按钮放进展开后的 header 行。
-    private var adjustmentSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                        isAdjustmentExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("手动调整")
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
-                                .foregroundStyle(primaryTextColor)
-
-                            Text(adjustmentSummary)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(secondaryTextColor)
-                        }
-
-                        Spacer()
-
-                        Image(systemName: isAdjustmentExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(secondaryTextColor)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                // 仅当存在非默认调整时显示重置图标，避免 header 上挂着无意义的按钮。
-                if adjustment != .default {
-                    Button(action: resetAdjustment) {
-                        Image(systemName: "arrow.counterclockwise.circle.fill")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(secondaryTextColor)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("重置手动调整")
-                    .disabled(isTransferInProgress)
-                }
-            }
-
-            if isAdjustmentExpanded {
-                VStack(alignment: .leading, spacing: 14) {
-                    adjustmentSlider(title: "缩放", value: $adjustment.scale, range: 0.25...3, format: scalePercent)
-                    adjustmentSlider(title: "旋转", value: $adjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
-                    adjustmentSlider(title: "水平", value: $adjustment.offsetX, range: -160...160, format: offsetText)
-                    adjustmentSlider(title: "垂直", value: $adjustment.offsetY, range: -160...160, format: offsetText)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    private func adjustmentSlider(
+    private func sliderRow(
         title: String,
         value: Binding<CGFloat>,
         range: ClosedRange<CGFloat>,
         format: (CGFloat) -> String
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(primaryTextColor)
-
-                Spacer()
-
+            LabeledContent(title) {
                 Text(format(value.wrappedValue))
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(secondaryTextColor)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
+            .font(.subheadline)
 
             Slider(value: value, in: range)
                 .disabled(isTransferInProgress)
         }
     }
+
+    // MARK: - Helpers
 
     private func resetAdjustment() {
         withAnimation(.easeOut(duration: 0.2)) {
@@ -413,31 +381,6 @@ struct TransferSheetView: View {
     private var activeDevice: BleDevice? {
         bleService.connectedDevice ?? bleService.selectedDevice
     }
-
-    private var backgroundColor: Color {
-        colorScheme == .dark ? Color(red: 0.07, green: 0.07, blue: 0.08) : .white
-    }
-
-    private var primaryTextColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.92)
-    }
-
-    private var secondaryTextColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.58) : Color.black.opacity(0.48)
-    }
-
-    private var rowFillColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.045)
-    }
-
-    private var selectedAlgorithmFillColor: Color {
-        colorScheme == .dark ? accentColor.opacity(0.18) : accentColor.opacity(0.10)
-    }
-
-    private var accentColor: Color {
-        Color(red: 0.18, green: 0.49, blue: 0.98)
-    }
-
 }
 
 // 上方的“土豆片”支持触控交互的预览：一指/双指拖动 = 偏移，双指捏合 = 缩放，双指旋转 = 旋转。

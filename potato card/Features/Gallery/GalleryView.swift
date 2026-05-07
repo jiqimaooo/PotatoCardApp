@@ -264,11 +264,6 @@ private struct GalleryImageViewer: View {
     }
 
     var body: some View {
-        let buttonTextColor = Color.white
-        let buttonFillColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
-        let secondaryTextColor = colorScheme == .dark ? Color.white.opacity(0.82) : Color.black.opacity(0.72)
-        let primaryButtonFillColor = Color(red: 0.0, green: 0.48, blue: 1.0)
-
         NavigationStack {
             ZStack {
                 (colorScheme == .dark ? Color.black : Color.white)
@@ -282,38 +277,28 @@ private struct GalleryImageViewer: View {
                     VStack(spacing: 10) {
                         transferStatusView
 
+                        // 主操作：使用系统的 borderedProminent + capsule 形状 + large 控件尺寸，
+                        // 跟随系统强调色与暗色模式，不再写死蓝色。
                         Button(action: transferSelectedPhotoDirectly) {
-                            Text("传输到设备")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(buttonTextColor)
-                                .padding(.horizontal, 18)
-                                .frame(height: 38)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(primaryButtonFillColor)
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(primaryButtonFillColor.opacity(0.16), lineWidth: 1)
-                                )
+                            Label("传输到设备", systemImage: "paperplane.fill")
+                                .labelStyle(.titleOnly)
+                                .frame(minWidth: 140)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.large)
                         .disabled(activeDevice == nil || isTransferInProgress)
 
+                        // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
+                        // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
                         Button(action: openManualAdjustment) {
-                            Text("手动调整")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(currentPhotoIsCustomized ? Color.black : secondaryTextColor)
-                                .padding(.horizontal, 16)
-                                .frame(height: 36)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        // 非默认状态使用 systemYellow（Apple HIG 黄色诡调色）
-                                        // 提示该照片已被手动调整过，点重置后会恢复原色。
-                                        .fill(currentPhotoIsCustomized ? Color(uiColor: .systemYellow) : buttonFillColor.opacity(0.72))
-                                )
+                            Label("手动调整", systemImage: "slider.horizontal.3")
+                                .frame(minWidth: 100)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.regular)
+                        .tint(currentPhotoIsCustomized ? .yellow : .secondary)
                         .disabled(isTransferInProgress)
                     }
                     .padding(.bottom, 10)
@@ -364,8 +349,8 @@ private struct GalleryImageViewer: View {
                 }
 
                 ToolbarItem(placement: .principal) {
-                    Text(photos[selectedIndex].title)
-                        .font(.system(size: 17, weight: .semibold))
+                    Text(renamedTitles[photos[selectedIndex].id] ?? photos[selectedIndex].title)
+                        .font(.headline)
                 }
             }
         }
