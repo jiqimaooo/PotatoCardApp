@@ -38,14 +38,16 @@ struct TransferProgressButton: View {
             label
         }
         .buttonStyle(.plain)
-        // 传输中也禁止再次点击；同时不允许在没有设备时点击。
-        .disabled(!isEnabled || isInProgress)
+        // 没设备时使用真正的 .disabled（系统会自动降透明 + 屏蔽 VoiceOver 操作）；
+        // 传输中只是临时不接受点击，但要保留按钮的强调色显示进度条，
+        // 因此用 .allowsHitTesting(false) 而不是 .disabled，避免按钮整体被系统压暗。
+        .disabled(!isEnabled)
+        .allowsHitTesting(isEnabled && !isInProgress)
         .animation(.easeInOut(duration: 0.18), value: isInProgress)
         .animation(.linear(duration: 0.15), value: clampedProgress)
     }
 
     private var label: some View {
-        let cornerRadius = height / 2
         let showsFill = isInProgress
 
         return ZStack(alignment: .leading) {
@@ -76,8 +78,6 @@ struct TransferProgressButton: View {
         }
         .frame(height: height)
         .clipShape(Capsule(style: .continuous))
-        // 没设备但又不是传输中时整体淡化，提示不可点击；传输中保持满不透明，凸显进度。
-        .opacity(isEnabled || isInProgress ? 1.0 : 0.4)
         .contentShape(Capsule(style: .continuous))
     }
 
