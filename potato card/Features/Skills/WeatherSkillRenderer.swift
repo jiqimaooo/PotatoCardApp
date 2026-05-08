@@ -145,12 +145,33 @@ enum WeatherSkillRenderer {
             accentText: UIColor.white
         )
 
+        // 黑色模板：以黑底 + 白色主体获取最强对比，布局与极简版保持一致。
+        // 云、雨、雪等装饰色素高亮度减弱，避免在黑背景上“偏亮”抢走主读信息。
+        static let blackMinimalist = RenderStyle(
+            background: UIColor.black,
+            foreground: UIColor.white,
+            divider: UIColor.white.withAlphaComponent(0.40),
+            cloudFill: UIColor.white.withAlphaComponent(0.20),
+            cloudMuted: UIColor.white.withAlphaComponent(0.14),
+            sunFill: UIColor.white,
+            sunRay: UIColor.white.withAlphaComponent(0.74),
+            moonFill: UIColor.white.withAlphaComponent(0.92),
+            rain: UIColor.white,
+            snow: UIColor.white,
+            fog: UIColor.white.withAlphaComponent(0.70),
+            wind: UIColor.white.withAlphaComponent(0.78),
+            thunder: UIColor.white,
+            accentText: UIColor.white
+        )
+
         init(template: WeatherDisplayTemplate) {
             switch template {
             case .minimalist:
                 self = .minimalist
             case .blueMinimalist:
                 self = .blueMinimalist
+            case .blackMinimalist:
+                self = .blackMinimalist
             }
         }
     }
@@ -207,7 +228,7 @@ enum WeatherSkillRenderer {
             context.fill(bounds)
 
             switch template {
-            case .minimalist, .blueMinimalist:
+            case .minimalist, .blueMinimalist, .blackMinimalist:
                 drawMinimalist(snapshot: snapshot, in: context.cgContext, style: style)
             }
         }

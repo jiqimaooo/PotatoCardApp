@@ -48,6 +48,7 @@ enum WeatherUpdateFrequency: String, Codable, CaseIterable, Identifiable {
 enum WeatherDisplayTemplate: String, Codable, CaseIterable, Identifiable {
     case minimalist
     case blueMinimalist
+    case blackMinimalist
 
     var id: String { rawValue }
 
@@ -57,6 +58,8 @@ enum WeatherDisplayTemplate: String, Codable, CaseIterable, Identifiable {
             return "白色版"
         case .blueMinimalist:
             return "蓝色版"
+        case .blackMinimalist:
+            return "黑色版"
         }
     }
 }
