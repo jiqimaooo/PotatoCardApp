@@ -30,7 +30,8 @@ enum TransferEditStateStore {
         return EInkManualAdjustment(
             scale: CGFloat(state.scale),
             offsetX: CGFloat(state.offsetX),
-            offsetY: CGFloat(state.offsetY)
+            offsetY: CGFloat(state.offsetY),
+            rotation: CGFloat(state.rotation ?? 0)
         )
     }
 
@@ -38,7 +39,8 @@ enum TransferEditStateStore {
         let state = StoredTransferEditState(
             scale: Double(adjustment.scale),
             offsetX: Double(adjustment.offsetX),
-            offsetY: Double(adjustment.offsetY)
+            offsetY: Double(adjustment.offsetY),
+            rotation: Double(adjustment.rotation)
         )
 
         guard let data = try? JSONEncoder().encode(state) else { return }
@@ -58,4 +60,6 @@ private struct StoredTransferEditState: Codable {
     let scale: Double
     let offsetX: Double
     let offsetY: Double
+    // 新增，旧记录缺失时默认 nil → 0 弧度。
+    let rotation: Double?
 }
