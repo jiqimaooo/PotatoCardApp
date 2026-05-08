@@ -30,13 +30,13 @@ struct SkillsHomeView: View {
             await weatherStore.onAppear()
             backfillTargetDeviceSelectionIfNeeded()
         }
-        .onChange(of: bleService.connectedDevice?.id) { _, _ in
+        .onChange(of: bleService.connectedDevice?.id) { _ in
             backfillTargetDeviceSelectionIfNeeded()
         }
-        .onChange(of: bleService.selectedDevice?.id) { _, _ in
+        .onChange(of: bleService.selectedDevice?.id) { _ in
             backfillTargetDeviceSelectionIfNeeded()
         }
-        .onChange(of: bleService.transferPhase) { _, phase in
+        .onChange(of: bleService.transferPhase) { phase in
             handleTransferPhaseChange(phase)
         }
     }

@@ -293,7 +293,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -350,7 +350,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -375,12 +375,14 @@
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				INFOPLIST_FILE = "potato card/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
@@ -426,12 +428,14 @@
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				INFOPLIST_FILE = "potato card/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
@@ -474,7 +478,7 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TransferLiveActivityWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -505,7 +509,7 @@
 				DEVELOPMENT_TEAM = F992GAYUKE;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TransferLiveActivityWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

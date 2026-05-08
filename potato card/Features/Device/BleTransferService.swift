@@ -1168,7 +1168,8 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
                 if self.hasAutomatedPush, !self.isTransferInProgress {
                     self.finishAutomatedPush(with: .failure(BleTransferError.bluetoothUnavailable(self.bluetoothState.title)))
                 }
-            } else if self.wantsForegroundAutoScan && !self.isScanning && self.connectedDevice == nil {
+            } else if self.wantsForegroundAutoScan && !self.isScanning && !self.isTransferInProgress {
+                // 蓝牙状态晚于页面启动才 ready 时，即使已有连接设备，也补扫一次刷新实时电量。
                 self.startScan()
             }
         }
@@ -1679,7 +1680,10 @@ private extension BleTransferService {
         } else {
             voltageChanged = oldSnapshot?.voltage != nil || device.batteryVoltage != nil
         }
-        let shouldLog = oldSnapshot?.percent != clampedPercent || voltageChanged
+        let activeDeviceID = connectedDevice?.id ?? selectedDevice?.id
+        let shouldApplyToHome = activeDeviceID == nil || activeDeviceID == device.id
+        let isFirstLiveRefreshAfterCache = source == .live && shouldApplyToHome && batteryDisplayState != .live
+        let shouldLog = oldSnapshot?.percent != clampedPercent || voltageChanged || isFirstLiveRefreshAfterCache
 
         let snapshot = DeviceBatterySnapshot(
             deviceID: device.id,
@@ -1691,8 +1695,6 @@ private extension BleTransferService {
         DeviceBatteryCacheStore.save(lastBatteryByDeviceID)
         DeviceBatteryCacheStore.lastDeviceID = device.id
 
-        let activeDeviceID = connectedDevice?.id ?? selectedDevice?.id
-        let shouldApplyToHome = activeDeviceID == nil || activeDeviceID == device.id
         if shouldApplyToHome {
             displayedBatteryPercent = clampedPercent
             batteryDisplayState = source
@@ -1701,7 +1703,7 @@ private extension BleTransferService {
 
         if shouldLog {
             let voltageText = device.batteryVoltage.map { String(format: "%.2fV", $0) } ?? "nil"
-            appendDiagnosticLog("电量更新：device=\(device.id)，name=\(device.name)，voltage=\(voltageText)，percent=\(clampedPercent)%")
+            appendDiagnosticLog("实时电压：device=\(device.id)，name=\(device.name)，voltage=\(voltageText)，percent=\(clampedPercent)%")
         }
     }
 

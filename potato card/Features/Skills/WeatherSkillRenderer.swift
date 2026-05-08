@@ -1214,14 +1214,26 @@ enum WeatherSkillRenderer {
     }
 
     private static func lunarText(_ date: Date) -> String {
-        let components = lunarCalendar.dateComponents([.month, .day, .isLeapMonth], from: date)
+        let components: DateComponents
+        if #available(iOS 17.0, *) {
+            components = lunarCalendar.dateComponents([.month, .day, .isLeapMonth], from: date)
+        } else {
+            // iOS 16 没有 isLeapMonth 组件，低版本只展示农历月日。
+            components = lunarCalendar.dateComponents([.month, .day], from: date)
+        }
         guard let month = components.month, let day = components.day else {
             return ""
         }
 
         let monthName = lunarMonthNames[max(0, min(lunarMonthNames.count - 1, month - 1))]
         let dayName = lunarDayNames[max(0, min(lunarDayNames.count - 1, day - 1))]
-        let prefix = components.isLeapMonth == true ? "农历闰" : "农历"
+        let isLeapMonth: Bool
+        if #available(iOS 17.0, *) {
+            isLeapMonth = components.isLeapMonth == true
+        } else {
+            isLeapMonth = false
+        }
+        let prefix = isLeapMonth ? "农历闰" : "农历"
         return prefix + monthName + dayName
     }
 

@@ -277,17 +277,11 @@ private struct GalleryImageViewer: View {
                     VStack(spacing: 10) {
                         transferStatusView
 
-                        // 主操作：使用系统的 borderedProminent + capsule 形状 + large 控件尺寸，
-                        // 跟随系统强调色与暗色模式，不再写死蓝色。
                         Button(action: transferSelectedPhotoDirectly) {
-                            Label("传输到设备", systemImage: "paperplane.fill")
-                                .labelStyle(.titleOnly)
-                                .frame(minWidth: 140)
+                            transferButtonLabel
                         }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.large)
-                        .disabled(activeDevice == nil || isTransferInProgress)
+                        .buttonStyle(.plain)
+                        .disabled(activeDevice == nil)
 
                         // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
                         // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
@@ -324,14 +318,14 @@ private struct GalleryImageViewer: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
-            .onChange(of: transferRequest?.id) { _, _ in
+            .onChange(of: transferRequest?.id) { _ in
                 // sheet 打开/关闭后重新加载调整状态，让一级页面的预览和黄色指示同步更新。
                 refreshCustomizedPhotoIDs()
             }
             .task {
                 refreshCustomizedPhotoIDs()
             }
-            .onChange(of: bleService.transferPhase) { _, phase in
+            .onChange(of: bleService.transferPhase) { phase in
                 guard phase == .succeeded, let data = pendingTransferData else { return }
                 if let pendingTransferImage {
                     bleService.markLastTransferredImage(pendingTransferImage)
@@ -342,12 +336,6 @@ private struct GalleryImageViewer: View {
                 dismiss()
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") {
-                        dismiss()
-                    }
-                }
-
                 ToolbarItem(placement: .principal) {
                     Text(renamedTitles[photos[selectedIndex].id] ?? photos[selectedIndex].title)
                         .font(.headline)
@@ -358,10 +346,7 @@ private struct GalleryImageViewer: View {
 
     @ViewBuilder
     private var transferStatusView: some View {
-        if isTransferInProgress {
-            ProgressView(value: bleService.transferProgress)
-                .frame(width: 150)
-        } else if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
+        if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
             Text(errorMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red)
@@ -370,7 +355,7 @@ private struct GalleryImageViewer: View {
     }
 
     private func transferSelectedPhotoDirectly() {
-        guard let device = activeDevice else { return }
+        guard !isTransferInProgress, let device = activeDevice else { return }
 
         let photo = photos[selectedIndex]
         // 传输这张照片时默认也要使用用户保存过的“手动调整”，跟预览保持一致。
@@ -426,6 +411,38 @@ private struct GalleryImageViewer: View {
 
     private var isTransferInProgress: Bool {
         bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
+    }
+
+    private var primaryTransferButtonFillColor: Color {
+        Color(red: 0.0, green: 0.48, blue: 1.0)
+    }
+
+    private var transferProgressPercent: Int {
+        min(100, max(0, Int((bleService.transferProgress * 100).rounded())))
+    }
+
+    private var transferButtonProgressTitle: String {
+        switch bleService.transferPhase {
+        case .preparing:
+            return "等待 \(transferProgressPercent)%"
+        case .transferring:
+            return "传输中 \(transferProgressPercent)%"
+        default:
+            return "传输到设备"
+        }
+    }
+
+    private var transferButtonLabel: some View {
+        TransferProgressButtonLabel(
+            title: "传输到设备",
+            progressTitle: transferButtonProgressTitle,
+            progress: bleService.transferProgress,
+            isInProgress: isTransferInProgress,
+            width: 140,
+            height: 38,
+            cornerRadius: 19,
+            accentColor: primaryTransferButtonFillColor
+        )
     }
 
     private var devicePreview: some View {

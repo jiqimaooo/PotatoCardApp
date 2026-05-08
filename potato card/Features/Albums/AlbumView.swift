@@ -192,7 +192,7 @@ private struct AlbumImageViewer: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .disabled(activeDevice == nil || isTransferInProgress)
+                        .disabled(activeDevice == nil)
 
                         Button(action: openManualAdjustment) {
                             Text("手动调整")
@@ -225,7 +225,7 @@ private struct AlbumImageViewer: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
-            .onChange(of: bleService.transferPhase) { _, phase in
+            .onChange(of: bleService.transferPhase) { phase in
                 guard phase == .succeeded, let album = pendingTransferAlbum else { return }
                 if let pendingTransferImage {
                     bleService.markLastTransferredImage(pendingTransferImage)
@@ -265,6 +265,7 @@ private struct AlbumImageViewer: View {
 
     private func transferSelectedAlbumDirectly() {
         guard
+            !isTransferInProgress,
             let device = activeDevice,
             let image = UIImage(named: albums[selectedIndex])
         else {

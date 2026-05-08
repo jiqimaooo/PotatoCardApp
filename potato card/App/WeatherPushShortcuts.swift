@@ -4,9 +4,7 @@ import OSLog
 struct WeatherPushIntent: AppIntent {
     static let title: LocalizedStringResource = "天气推送"
     static let description = IntentDescription("获取当前最新天气并推送到已绑定的墨水屏设备。")
-    // 明确声明为后台快捷指令；新系统推荐用 supportedModes 代替 openAppWhenRun。
-    static var supportedModes: IntentModes { .background }
-    @available(*, deprecated, message: "保留给旧系统兼容，实际以后面的 supportedModes 为准。")
+    // iOS 16.5 仍使用 openAppWhenRun 控制后台执行；iOS 26 的 supportedModes 放在可用性扩展里。
     static let openAppWhenRun = false
     private let logger = Logger(subsystem: "com.xiaogousi.online.potato-card", category: "WeatherShortcut")
 
@@ -40,6 +38,11 @@ struct WeatherPushIntent: AppIntent {
 
         return "天气推送失败，请打开 App 检查天气配置、蓝牙权限和同步设备。"
     }
+}
+
+@available(iOS 26.0, *)
+extension WeatherPushIntent {
+    static var supportedModes: IntentModes { .background }
 }
 
 struct PotatoCardShortcutsProvider: AppShortcutsProvider {

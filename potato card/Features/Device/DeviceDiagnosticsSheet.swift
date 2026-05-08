@@ -165,7 +165,7 @@ struct DeviceDiagnosticsSheet: View {
                 }
                 .frame(minHeight: 180, maxHeight: 300)
                 .background(logFillColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .onChange(of: bleService.diagnosticLogs.count) { _, _ in
+                .onChange(of: bleService.diagnosticLogs.count) { _ in
                     guard let lastID = bleService.diagnosticLogs.last?.id else { return }
                     // 日志区自动滚到最新事件，方便真机联调时盯进度。
                     withAnimation(.easeOut(duration: 0.2)) {

@@ -20,7 +20,7 @@ struct PotatoCardApp: App {
                 .onAppear {
                     weatherAutoUpdateScheduler.handleScenePhase(scenePhase)
                 }
-                .onChange(of: scenePhase) { _, phase in
+                .onChange(of: scenePhase) { phase in
                     weatherAutoUpdateScheduler.handleScenePhase(phase)
                 }
         }

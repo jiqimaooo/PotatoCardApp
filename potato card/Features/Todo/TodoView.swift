@@ -41,7 +41,7 @@ struct TodoView: View {
             }
             .frame(width: 0, height: 0)
         }
-        .onChange(of: bleService.transferPhase) { _, phase in
+        .onChange(of: bleService.transferPhase) { phase in
             guard phase == .succeeded, let pendingDisplayImage else { return }
             bleService.markLastTransferredImage(pendingDisplayImage)
             self.pendingDisplayImage = nil
@@ -295,7 +295,7 @@ struct TodoView: View {
 
     private var addTodoView: some View {
         HStack(spacing: 12) {
-            TextField("", text: $newTodoTitle, prompt: Text("添加新待办…").foregroundStyle(placeholderTextColor))
+            TextField("", text: $newTodoTitle, prompt: Text("添加新待办…").foregroundColor(placeholderTextColor))
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(todoTextColor)
                 .submitLabel(.done)

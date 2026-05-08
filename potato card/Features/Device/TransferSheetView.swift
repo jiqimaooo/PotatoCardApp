@@ -94,7 +94,7 @@ struct TransferSheetView: View {
             } message: {
                 Text("仅修改这张照片的显示名称。")
             }
-            .onChange(of: bleService.transferPhase) { _, phase in
+            .onChange(of: bleService.transferPhase) { phase in
                 if phase == .succeeded {
                     saveEditStateIfNeeded()
                     bleService.markLastTransferredImage(displayImage)
@@ -239,23 +239,8 @@ struct TransferSheetView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if isTransferInProgress {
-                VStack(spacing: 6) {
-                    HStack {
-                        Text(bleService.transferPhase.title)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(Int(bleService.transferProgress * 100))%")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: bleService.transferProgress)
-                }
-            }
-
             Button {
-                guard let device = activeDevice else { return }
+                guard !isTransferInProgress, let device = activeDevice else { return }
                 // 点击主按钮同时完成“保存 + 传输”，即使传输中途失败也能保留调整。
                 saveEditStateIfNeeded()
                 bleService.transfer(
@@ -265,14 +250,17 @@ struct TransferSheetView: View {
                     algorithm: selectedDitherAlgorithm
                 )
             } label: {
-                Label("保存并传输到设备", systemImage: "paperplane.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 28)
+                TransferProgressButtonLabel(
+                    title: "保存并传输到设备",
+                    progressTitle: transferButtonProgressTitle,
+                    progress: bleService.transferProgress,
+                    isInProgress: isTransferInProgress,
+                    height: 50,
+                    cornerRadius: 25
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
-            .disabled(activeDevice == nil || isTransferInProgress)
+            .buttonStyle(.plain)
+            .disabled(activeDevice == nil)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -366,6 +354,21 @@ struct TransferSheetView: View {
         bleService.transferPhase == .transferring || bleService.transferPhase == .preparing
     }
 
+    private var transferProgressPercent: Int {
+        min(100, max(0, Int((bleService.transferProgress * 100).rounded())))
+    }
+
+    private var transferButtonProgressTitle: String {
+        switch bleService.transferPhase {
+        case .preparing:
+            return "等待 \(transferProgressPercent)%"
+        case .transferring:
+            return "传输中 \(transferProgressPercent)%"
+        default:
+            return "保存并传输到设备"
+        }
+    }
+
     private var displayImage: UIImage {
         EInkImageRenderer.render(
             image: sourceImage,
@@ -393,6 +396,56 @@ struct TransferSheetView: View {
 
     private var activeDevice: BleDevice? {
         bleService.connectedDevice ?? bleService.selectedDevice
+    }
+}
+
+struct TransferProgressButtonLabel: View {
+    let title: String
+    let progressTitle: String
+    let progress: Double
+    let isInProgress: Bool
+    var width: CGFloat? = nil
+    let height: CGFloat
+    let cornerRadius: CGFloat
+    var accentColor = Color(red: 0.0, green: 0.48, blue: 1.0)
+
+    private var clampedProgress: CGFloat {
+        CGFloat(min(1, max(0, progress)))
+    }
+
+    private var showsProgressFill: Bool {
+        isInProgress && clampedProgress >= 0.03
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(isInProgress ? accentColor.opacity(0.28) : accentColor)
+
+            if showsProgressFill {
+                GeometryReader { proxy in
+                    // 传输中用按钮内部进度填充，外层低透明度底色就是灰色蒙层效果。
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(accentColor)
+                        .frame(width: min(proxy.size.width, max(height, proxy.size.width * clampedProgress)))
+                }
+                .allowsHitTesting(false)
+            }
+
+            Text(isInProgress ? progressTitle : title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(accentColor.opacity(isInProgress ? 0.10 : 0.16), lineWidth: 1)
+        )
     }
 }
 

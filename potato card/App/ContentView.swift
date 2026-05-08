@@ -80,10 +80,10 @@ struct ContentView: View {
             loadTransferredPhotoImage()
             scheduleSafeTabPrewarmIfNeeded()
         }
-        .onChange(of: selectedTab) { _, tab in
+        .onChange(of: selectedTab) { tab in
             loadedTabs.insert(tab)
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
                 bleService.handleSceneBecameActive()
@@ -93,7 +93,7 @@ struct ContentView: View {
                 break
             }
         }
-        .onChange(of: transferredPhotoPath) { _, _ in
+        .onChange(of: transferredPhotoPath) { _ in
             loadTransferredPhotoImage()
         }
     }
@@ -372,7 +372,7 @@ struct ContentView: View {
                 .foregroundStyle(iconColor)
                 .frame(width: 16, height: 16)
         }
-        .onChange(of: isConnecting) { _, newValue in
+        .onChange(of: isConnecting) { newValue in
             bluetoothPulse = newValue
         }
     }
