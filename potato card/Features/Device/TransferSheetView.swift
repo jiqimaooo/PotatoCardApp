@@ -187,7 +187,7 @@ struct TransferSheetView: View {
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("图像算法")
+                    Text("全局图像算法")
                         .font(.headline)
                         .foregroundStyle(.primary)
                     Text(selectedDitherAlgorithm.title)
