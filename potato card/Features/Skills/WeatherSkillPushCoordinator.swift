@@ -120,6 +120,9 @@ final class WeatherSkillPushCoordinator {
             return "已推送到\(device.name)"
         }
 
+        // 快捷指令路径走 returnAfterTransferStarted=true，依然把这次执行视作一次成功的同步事件，
+        // 这样“同步时更新”频率以及 UI 的“上次同步”时间能正确反映快捷指令触发的同步。
+        store.markSynced()
         return "已开始传输数据到\(device.name)，后台会继续推送"
     }
 

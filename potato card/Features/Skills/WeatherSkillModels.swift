@@ -27,6 +27,7 @@ enum WeatherCityMode: String, Codable, CaseIterable, Identifiable {
 }
 
 enum WeatherUpdateFrequency: String, Codable, CaseIterable, Identifiable {
+    case onSync
     case hourly
     case everyThreeHours
     case daily
@@ -35,12 +36,24 @@ enum WeatherUpdateFrequency: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .onSync:
+            return "同步时更新"
         case .hourly:
             return "每小时"
         case .everyThreeHours:
             return "每 3 小时"
         case .daily:
             return "每天"
+        }
+    }
+
+    // “同步时更新” 由手动同步/快捷指令触发，不参与后台定时调度。
+    var supportsScheduledAutoUpdate: Bool {
+        switch self {
+        case .onSync:
+            return false
+        case .hourly, .everyThreeHours, .daily:
+            return true
         }
     }
 }

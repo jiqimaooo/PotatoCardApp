@@ -115,6 +115,10 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
             logger.error("天气自动更新跳过：未选择同步设备。")
             return false
         }
+        guard store.config.updateFrequency.supportsScheduledAutoUpdate else {
+            logger.info("天气自动更新跳过：当前频率为\(store.config.updateFrequency.title, privacy: .public)，仅同步时更新。")
+            return true
+        }
         guard isDue(configuration: store.config) else {
             logger.info("天气自动更新跳过：未到更新频率。reason=\(reason, privacy: .public)")
             return true
@@ -154,6 +158,11 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
     private func scheduleBackgroundRefresh() {
         let store = WeatherSkillStore()
         guard store.config.isEnabled, store.config.isAutoUpdateEnabled, store.config.hasCredentials else { return }
+        // “同步时更新” 不产生后台刷新请求，避免浪费后台预算。
+        guard store.config.updateFrequency.supportsScheduledAutoUpdate else {
+            logger.info("天气自动更新后台任务未提交：当前频率为\(store.config.updateFrequency.title, privacy: .public)。")
+            return
+        }
 
         let request = BGAppRefreshTaskRequest(identifier: Constants.taskIdentifier)
         request.earliestBeginDate = nextEarliestBeginDate(configuration: store.config)
@@ -177,6 +186,9 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
 private extension WeatherUpdateFrequency {
     var automationInterval: TimeInterval {
         switch self {
+        case .onSync:
+            // 同步时更新不走定时逻辑，返回一个不会被 isDue 函数命中的超大间隔。
+            return .greatestFiniteMagnitude
         case .hourly:
             return 60 * 60
         case .everyThreeHours:
