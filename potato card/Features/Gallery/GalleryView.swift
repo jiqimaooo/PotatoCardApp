@@ -277,17 +277,18 @@ private struct GalleryImageViewer: View {
                     VStack(spacing: 10) {
                         transferStatusView
 
-                        // 主操作：使用系统的 borderedProminent + capsule 形状 + large 控件尺寸，
-                        // 跟随系统强调色与暗色模式，不再写死蓝色。
-                        Button(action: transferSelectedPhotoDirectly) {
-                            Label("传输到设备", systemImage: "paperplane.fill")
-                                .labelStyle(.titleOnly)
-                                .frame(minWidth: 140)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.large)
-                        .disabled(activeDevice == nil || isTransferInProgress)
+                        // 主操作：使用 TransferProgressButton。空闲时为强调色胶囊按钮；
+                        // 传输/等待时按钮自身复用为苹果风格的进度条，避免 .borderedProminent
+                        // 在 disabled 状态下丢失背景色的问题。
+                        TransferProgressButton(
+                            idleTitle: "传输到设备",
+                            inProgressTitle: "传输中",
+                            progress: bleService.transferProgress,
+                            isInProgress: isTransferInProgress,
+                            isEnabled: activeDevice != nil,
+                            action: transferSelectedPhotoDirectly
+                        )
+                        .frame(minWidth: 180)
 
                         // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
                         // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
@@ -358,10 +359,8 @@ private struct GalleryImageViewer: View {
 
     @ViewBuilder
     private var transferStatusView: some View {
-        if isTransferInProgress {
-            ProgressView(value: bleService.transferProgress)
-                .frame(width: 150)
-        } else if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
+        // 进度展示已经合并到 TransferProgressButton 自身，这里只在失败时显示错误描述。
+        if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
             Text(errorMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red)

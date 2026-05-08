@@ -158,10 +158,8 @@ private struct AlbumImageViewer: View {
     }
 
     var body: some View {
-        let buttonTextColor = Color.white
         let buttonFillColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
         let secondaryTextColor = colorScheme == .dark ? Color.white.opacity(0.82) : Color.black.opacity(0.72)
-        let primaryButtonFillColor = Color(red: 0.0, green: 0.48, blue: 1.0)
 
         NavigationStack {
             ZStack {
@@ -176,23 +174,21 @@ private struct AlbumImageViewer: View {
                     VStack(spacing: 10) {
                         transferStatusView
 
-                        Button(action: transferSelectedAlbumDirectly) {
-                            Text("传输到设备")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(buttonTextColor)
-                                .padding(.horizontal, 18)
-                                .frame(height: 38)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(primaryButtonFillColor)
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(primaryButtonFillColor.opacity(0.16), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(activeDevice == nil || isTransferInProgress)
+                        // 主操作：使用 TransferProgressButton。空闲时为强调色胶囊按钮；
+                        // 传输/等待时按钮自身复用为苹果风格的进度条，避免 disabled 状态下
+                        // 背景色被系统抹平的问题。
+                        TransferProgressButton(
+                            idleTitle: "传输到设备",
+                            inProgressTitle: "传输中",
+                            progress: bleService.transferProgress,
+                            isInProgress: isTransferInProgress,
+                            isEnabled: activeDevice != nil,
+                            action: transferSelectedAlbumDirectly,
+                            height: 38,
+                            fontSize: 14,
+                            tint: Color(red: 0.0, green: 0.48, blue: 1.0)
+                        )
+                        .frame(minWidth: 160)
 
                         Button(action: openManualAdjustment) {
                             Text("手动调整")
@@ -252,10 +248,8 @@ private struct AlbumImageViewer: View {
 
     @ViewBuilder
     private var transferStatusView: some View {
-        if isTransferInProgress {
-            ProgressView(value: bleService.transferProgress)
-                .frame(width: 150)
-        } else if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
+        // 进度展示已经合并到 TransferProgressButton 自身，这里只在失败时显示错误描述。
+        if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
             Text(errorMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red)
