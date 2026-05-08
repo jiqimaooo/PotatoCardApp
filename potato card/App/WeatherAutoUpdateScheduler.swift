@@ -6,7 +6,7 @@ import SwiftUI
 
 @MainActor
 final class WeatherAutoUpdateScheduler: ObservableObject {
-    private enum Constants {
+    fileprivate enum Constants {
         static let taskIdentifier = "com.liyouliang.potatocard.weather-refresh"
         static let lastAttemptKey = "weatherAutoUpdateLastAttemptAt"
         static let minimumForegroundCheckInterval: TimeInterval = 5 * 60
@@ -15,10 +15,35 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
     private let logger = Logger(subsystem: "com.xiaogousi.online.potato-card", category: "WeatherAutoUpdate")
     private var foregroundLoopTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
-    private var didRegisterBackgroundTask = false
 
-    init() {
-        registerBackgroundTask()
+    // 单例入口。在 PotatoCardApp.init 里预热使用，以便 BG task handler 能找到同一个实例。
+    @MainActor static let shared = WeatherAutoUpdateScheduler()
+
+    private init() {}
+
+    // 必须在 application(_:didFinishLaunching*) 返回前调用，
+    // 否则 BGTaskScheduler 会抛 NSInternalInconsistencyException。
+    // 调用点：PotatoCardApp.init()。
+    nonisolated static func registerBackgroundTaskIfNeeded() {
+        Self.registerBackgroundTaskOnce.run()
+    }
+
+    fileprivate func handleBackgroundRefreshFromScheduler(_ task: BGAppRefreshTask) {
+        scheduleBackgroundRefresh()
+
+        let updateTask = Task { [weak self] in
+            guard let self else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+
+            let success = await self.runIfDue(reason: "background-refresh")
+            task.setTaskCompleted(success: success)
+        }
+
+        task.expirationHandler = {
+            updateTask.cancel()
+        }
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
@@ -35,26 +60,8 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
     }
 
     private func registerBackgroundTask() {
-        guard !didRegisterBackgroundTask else { return }
-        didRegisterBackgroundTask = true
-
-        let didRegister = BGTaskScheduler.shared.register(forTaskWithIdentifier: Constants.taskIdentifier, using: nil) { [weak self] task in
-            guard let refreshTask = task as? BGAppRefreshTask else {
-                task.setTaskCompleted(success: false)
-                return
-            }
-
-            Task { @MainActor [weak self] in
-                self?.handleBackgroundRefresh(refreshTask)
-            }
-        }
-
-        if didRegister {
-            logger.info("天气自动更新后台任务注册成功。")
-            scheduleBackgroundRefresh()
-        } else {
-            logger.error("天气自动更新后台任务注册失败。")
-        }
+        // 保留实例方法避免外部调用点报错。真正的注册走 registerBackgroundTaskIfNeeded。
+        WeatherAutoUpdateScheduler.registerBackgroundTaskIfNeeded()
     }
 
     private func startForegroundLoop() {
@@ -71,24 +78,6 @@ final class WeatherAutoUpdateScheduler: ObservableObject {
     private func stopForegroundLoop() {
         foregroundLoopTask?.cancel()
         foregroundLoopTask = nil
-    }
-
-    private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
-        scheduleBackgroundRefresh()
-
-        let updateTask = Task { [weak self] in
-            guard let self else {
-                task.setTaskCompleted(success: false)
-                return
-            }
-
-            let success = await self.runIfDue(reason: "background-refresh")
-            task.setTaskCompleted(success: success)
-        }
-
-        task.expirationHandler = {
-            updateTask.cancel()
-        }
     }
 
     @discardableResult
@@ -198,3 +187,36 @@ private extension WeatherUpdateFrequency {
         }
     }
 }
+
+extension WeatherAutoUpdateScheduler {
+    // 一次性注册容器：BGTaskScheduler.register 只能在 app finishLaunching 之前调用一次。
+    // 用 dispatch_once 等价的 NSLock + Bool flag 保证幂等，且支持 nonisolated 调用（@main App init 是 nonisolated）。
+    final class Once {
+        private let lock = NSLock()
+        private var didRun = false
+
+        nonisolated func run() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !didRun else { return }
+            didRun = true
+
+            let didRegister = BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: Constants.taskIdentifier,
+                using: nil
+            ) { task in
+                guard let refreshTask = task as? BGAppRefreshTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                Task { @MainActor in
+                    WeatherAutoUpdateScheduler.shared.handleBackgroundRefreshFromScheduler(refreshTask)
+                }
+            }
+            ShortcutDebugLog.log("WeatherAutoUpdate", "BGTaskScheduler register didRegister=\(didRegister)")
+        }
+    }
+
+    nonisolated(unsafe) static let registerBackgroundTaskOnce = Once()
+}
+

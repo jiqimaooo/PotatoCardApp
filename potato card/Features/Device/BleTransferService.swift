@@ -1,4 +1,5 @@
 import Combine
+import CoreBluetooth
 import Foundation
 import OSLog
 import UIKit
@@ -185,7 +186,7 @@ enum BleTransferError: LocalizedError {
         case .imageInvalid:
             return "图片生成异常，请重新选择图片。"
         case .deviceNotFound(let name):
-            return "没有扫描到设备 \(name)，纯后台推送只在设备已连接或可快速扫描到时可靠。"
+            return "没有扫到设备 \(name)。请确保设备在附近、已开机且未休眠；后台推送可能需要重试一次。"
         case .transferFailed(let message):
             return message
         case .transferTimedOut:
@@ -745,6 +746,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     private var lastLoggedTransferPercentBucket = -1
 
     override init() {
+        ShortcutDebugLog.log("BleTransferService", "init begin pid=\(ProcessInfo.processInfo.processIdentifier)")
         rememberedDeviceIDs = Set(UserDefaults.standard.stringArray(forKey: Self.rememberedDeviceIDsKey) ?? [])
         lastBatteryByDeviceID = DeviceBatteryCacheStore.load()
         if let savedAlgorithm = UserDefaults.standard.string(forKey: BleDiagnosticsStorage.ditherAlgorithmKey),
@@ -756,6 +758,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         super.init()
         appendDiagnosticLog("调试会话已启动，算法：\(ditherAlgorithm.title)")
         restoreDisplayedBatteryFromCache()
+        ShortcutDebugLog.log("BleTransferService", "init end")
     }
 
     convenience init(forcePreviewPrompt: Bool) {
@@ -802,13 +805,19 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     }
 
     func handleSceneBecameActive() {
+        ShortcutDebugLog.log("BleTransferService", "handleSceneBecameActive enter inProgress=\(isTransferInProgress) hasAuto=\(hasAutomatedPush) bt=\(bluetoothState.title)")
         isAppInForeground = true
         endLiveTransferActivityIfNeeded(finalPhaseTitle: transferPhase.title)
-        guard !isTransferInProgress else { return }
+        guard !isTransferInProgress else {
+            ShortcutDebugLog.log("BleTransferService", "handleSceneBecameActive skip: transfer in progress")
+            return
+        }
         beginForegroundAutoScan()
+        ShortcutDebugLog.log("BleTransferService", "handleSceneBecameActive done")
     }
 
     func handleSceneEnteredBackground() {
+        ShortcutDebugLog.log("BleTransferService", "handleSceneEnteredBackground inProgress=\(isTransferInProgress)")
         isAppInForeground = false
         wantsForegroundAutoScan = false
         guard !isTransferInProgress else {
@@ -1103,6 +1112,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     ) async throws -> BleDevice {
         ensureManagerStarted()
         logger.info("开始蓝牙天气推送：targetID=\(snapshot.id, privacy: .public), name=\(snapshot.name, privacy: .public)")
+        ShortcutDebugLog.log("BleTransferService", "pushWeatherImage enter targetID=\(snapshot.id) name=\(snapshot.name) returnAfter=\(returnAfterTransferStarted) bt=\(bluetoothState.title) connected=\(connectedDevice?.id ?? "nil")")
         transferPresentationMode = .backgroundShortcut
         beginBackgroundShortcutTransferRecord(for: snapshot)
 
@@ -1142,18 +1152,21 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
 
             if let device = self.connectedDevice, self.device(device, matches: snapshot) {
                 self.logger.info("目标设备当前已连接，直接开始传输。")
+                ShortcutDebugLog.log("BleTransferService", "already connected, start transfer to \(device.id)")
                 self.startAutomatedTransfer(to: device)
                 return
             }
 
             if let device = self.devices.first(where: { self.device($0, matches: snapshot) }) {
                 self.logger.info("使用当前会话里缓存的目标设备，避免后台重新扫描失败。")
+                ShortcutDebugLog.log("BleTransferService", "using cached scanned device \(device.id)")
                 self.startAutomatedTransfer(to: device)
                 return
             }
 
             // 没有可用缓存时再扫描，后台扫描可能被系统限制。
             self.logger.info("后台运行或未命中当前会话，开始自动扫描目标设备。")
+            ShortcutDebugLog.log("BleTransferService", "no cached device, start automated scan")
             self.startAutomatedScan(for: snapshot)
         }
     }
@@ -1181,6 +1194,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         Task { @MainActor in
             let bleDevice = BleDevice(rawDevice: payloadBox.payload)
             self.updateBatteryDisplay(from: bleDevice, source: .live)
+            self.persistDeviceForBackgroundShortcut(bleDevice)
 
             if let index = self.devices.firstIndex(where: { $0.id == bleDevice.id }) {
                 self.devices[index] = bleDevice
@@ -1345,10 +1359,88 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         }
     }
 
+    private func persistDeviceForBackgroundShortcut(_ device: BleDevice) {
+        // 保存完整 rawDevice 给 CompatProbe 路径（后台路径需要补齐 SDK 内部依赖的 type/version/power 等字段）。
+        CachedSDKDeviceDictStore.save(deviceID: device.id, rawDevice: device.rawDevice)
+    }
+
+    private func startCompatProbeIfEnabled(for snapshot: WeatherTargetDeviceSnapshot) {
+        guard CardPushPreferences.compatibilityProbeEnabled else { return }
+        // 没有缓存的 SDK rawDevice 字典时，probe 即使扫到也无法构造 SDK 期望的设备入参；跳过避免误导。
+        guard CachedSDKDeviceDictStore.load(deviceID: snapshot.id) != nil else {
+            ShortcutDebugLog.log("BleTransferService", "compat probe skip: no cached SDK device dict for \(snapshot.id); 请先打开 App 让前台扫描刷新一次")
+            return
+        }
+        // 使用全局单例，以便 iOS 的 state restoration 能够在同一个 CBCentralManager 上回调。
+        // probe didDiscover 后把设备喂回 BleTransferService，绕过 SDK 内部失效的后台扫描。
+        BackgroundCompatProbe.shared.onDeviceDiscovered = { [weak self] peripheral, advertisementData, rssi in
+            guard let self else { return }
+            self.handleCompatProbeDiscovery(peripheral: peripheral, advertisementData: advertisementData, rssi: rssi, expectedDeviceID: snapshot.id)
+        }
+        BackgroundCompatProbe.shared.start()
+        ShortcutDebugLog.log("BleTransferService", "compat probe started for \(snapshot.id)")
+    }
+
+    private func stopCompatProbeIfRunning() {
+        BackgroundCompatProbe.shared.onDeviceDiscovered = nil
+        guard BackgroundCompatProbe.shared.isRunning else { return }
+        BackgroundCompatProbe.shared.stop()
+        ShortcutDebugLog.log("BleTransferService", "compat probe stopped")
+    }
+
+    // 把 CompatProbe 扫到的 peripheral 转成 PickBleManager 的设备字典格式，
+    // 直接走和 bluetoothSearchDevice 一样的处理路径。
+    private func handleCompatProbeDiscovery(
+        peripheral: CBPeripheral,
+        advertisementData: [String: Any],
+        rssi: NSNumber,
+        expectedDeviceID: String
+    ) {
+        guard hasAutomatedPush, automatedMatchedDevice == nil else { return }
+
+        // 设备名优先用广播里的 localName（一般包含 NEMR 编号），其次用 peripheral.name（PICKSMART 占位符）。
+        let advertisedName = (advertisementData[CBAdvertisementDataLocalNameKey] as? String)?.trimmed
+        let peripheralName = peripheral.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = (advertisedName?.isEmpty == false ? advertisedName : nil) ?? peripheralName ?? ""
+
+        // 以前台扫到同设备时缓存的完整字典为基础，上面叠加本次广告的 rssi/name/peripheral。
+        // 这样 type/version/power 等 SDK 内部必需字段就不会为 nil。
+        var rawDevice: [AnyHashable: Any] = CachedSDKDeviceDictStore.load(deviceID: expectedDeviceID) ?? [:]
+        rawDevice["device"] = peripheral
+        rawDevice["rssi"] = rssi.intValue
+        if !resolvedName.isEmpty {
+            rawDevice["name"] = resolvedName
+        } else if rawDevice["name"] == nil {
+            rawDevice["name"] = expectedDeviceID
+        }
+        if rawDevice["mac"] == nil { rawDevice["mac"] = expectedDeviceID }
+        if rawDevice["macAddress"] == nil { rawDevice["macAddress"] = expectedDeviceID }
+        if rawDevice["address"] == nil { rawDevice["address"] = expectedDeviceID }
+        if let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
+            rawDevice["manufacturerData"] = manufacturerData
+        }
+        ShortcutDebugLog.log("BleTransferService", "compat probe rawDevice keys=\(rawDevice.keys.compactMap { $0 as? String }.sorted())")
+
+        let bleDevice = BleDevice(rawDevice: rawDevice)
+        ShortcutDebugLog.log("BleTransferService", "compat probe synthesized device id=\(bleDevice.id) name=\(bleDevice.name) for SDK")
+
+        guard let snapshot = automatedTargetSnapshot, device(bleDevice, matches: snapshot) else {
+            ShortcutDebugLog.log("BleTransferService", "compat probe device does not match target snapshot \(automatedTargetSnapshot?.id ?? "nil")")
+            return
+        }
+
+        // 把发现到的设备塞进我们的本地列表，然后启动自动传输。
+        if devices.first(where: { $0.id == bleDevice.id }) == nil {
+            devices.append(bleDevice)
+        }
+        startAutomatedTransfer(to: bleDevice)
+    }
+
     private func startAutomatedScan(for snapshot: WeatherTargetDeviceSnapshot) {
         logger.info("开始自动扫描设备：\(snapshot.name, privacy: .public)")
         appendDiagnosticLog("开始自动扫描：\(snapshot.name)")
         updateBackgroundShortcutTransferRecord(phase: .scanning, lastEvent: "开始扫描目标设备")
+        ShortcutDebugLog.log("BleTransferService", "startAutomatedScan target=\(snapshot.id) bt=\(bluetoothState.title)")
         errorMessage = nil
         automatedMatchedDevice = nil
         devices.removeAll()
@@ -1358,15 +1450,33 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
             manager.stopScan()
         }
 
+        startCompatProbeIfEnabled(for: snapshot)
+
         automatedScanTimeoutTask?.cancel()
         automatedScanTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            // 后台扫描被下动设备广播间隔制约，金那奇（极低功耗）设备可能 10–20s 才会广播一次。
+            // 在 30s UIApplication 后台预算内拉長到 24s，并在 8s/16s 中途重启扫描会话，最大化命中机会。
+            for kickIndex in 0..<2 {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard let strongSelf = self, strongSelf.hasAutomatedPush, strongSelf.automatedMatchedDevice == nil else { return }
+                guard strongSelf.bluetoothState.canScan else { continue }
+                ShortcutDebugLog.log("BleTransferService", "scan kick #\(kickIndex + 1) (no match yet)")
+                strongSelf.appendDiagnosticLog("后台扫描未命中，重新启动扫描 #\(kickIndex + 1)", level: .warning)
+                strongSelf.manager.stopScan()
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let kickSelf = self, kickSelf.hasAutomatedPush, kickSelf.automatedMatchedDevice == nil else { return }
+                guard kickSelf.bluetoothState.canScan else { continue }
+                kickSelf.manager.startScan()
+            }
+
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard let self, self.hasAutomatedPush, self.automatedMatchedDevice == nil else { return }
             if self.bluetoothState.canScan {
                 self.manager.stopScan()
             }
             self.isScanning = false
             self.logger.error("自动扫描超时：\(snapshot.name, privacy: .public)")
+            ShortcutDebugLog.log("BleTransferService", "automated scan timed out (24s) for \(snapshot.id)")
             self.finishAutomatedPush(with: .failure(BleTransferError.deviceNotFound(snapshot.name)))
         }
 
@@ -1409,6 +1519,8 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     private func finishAutomatedPush(with result: Result<BleDevice, Error>) {
         let continuation = automatedPushContinuation
         let displayImage = automatedPushDisplayImage
+        let hadContinuation = continuation != nil
+        ShortcutDebugLog.log("BleTransferService", "finishAutomatedPush hadContinuation=\(hadContinuation) result=\(String(describing: result))")
         automatedPushContinuation = nil
         automatedPushImage = nil
         automatedPushDisplayImage = nil
@@ -1422,6 +1534,7 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         automatedScanTimeoutTask = nil
         automatedTransferTimeoutTask?.cancel()
         automatedTransferTimeoutTask = nil
+        stopCompatProbeIfRunning()
         // 自动推送由快捷指令驱动，完成或失败时必须释放后台任务和 UI 状态。
         endTransferBackgroundTask()
         transferPresentationMode = .interactive
@@ -1515,8 +1628,10 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         guard !didStartManagerWork else { return }
         didStartManagerWork = true
         // SDK 初始化可能触发系统蓝牙状态检查，延后到用户看到首屏后再启动。
+        ShortcutDebugLog.log("BleTransferService", "ensureManagerStarted: setting delegate + startWork")
         manager.delegate = self
         manager.startWork()
+        ShortcutDebugLog.log("BleTransferService", "ensureManagerStarted: startWork returned")
     }
 
     private func waitForBluetoothReadyIfNeeded() async throws {
