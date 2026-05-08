@@ -1,3 +1,4 @@
+import CoreBluetooth
 import CoreGraphics
 import Foundation
 
@@ -18,18 +19,24 @@ struct BleDevice: Identifiable, Hashable {
         let rawMac = sanitizedRawDevice["mac"] as? String
         let rawMacAddress = sanitizedRawDevice["macAddress"] as? String
         let rawAddress = sanitizedRawDevice["address"] as? String
+        let rawLocalName = sanitizedRawDevice["localName"] as? String
+        let peripheral = sanitizedRawDevice["device"] as? CBPeripheral
 
         // SDK 回调里常用 `macAddress` 保存设备编号，必须和 `mac` 一起纳入识别。
         let normalizedName = BleDevice.normalizedString(rawName)
         let normalizedMac = BleDevice.normalizedString(rawMac)
         let normalizedMacAddress = BleDevice.normalizedString(rawMacAddress)
         let normalizedAddress = BleDevice.normalizedString(rawAddress)
+        let normalizedLocalName = BleDevice.normalizedString(rawLocalName)
+        let normalizedPeripheralName = BleDevice.normalizedString(peripheral?.name)
+        // iOS 不暴露真实蓝牙 MAC；SDK 不给 mac/name 时，用系统分配的 peripheral UUID 做本机唯一标识。
+        let normalizedPeripheralID = BleDevice.normalizedString(peripheral?.identifier.uuidString)
 
-        self.name = normalizedName ?? normalizedMacAddress ?? normalizedMac ?? "未知设备"
-        self.address = normalizedMacAddress ?? normalizedMac ?? normalizedAddress ?? ""
-        self.id = normalizedMacAddress ?? normalizedMac ?? normalizedAddress ?? self.name
+        self.name = normalizedName ?? normalizedLocalName ?? normalizedMacAddress ?? normalizedMac ?? normalizedPeripheralName ?? "未知设备"
+        self.address = normalizedMacAddress ?? normalizedMac ?? normalizedAddress ?? normalizedLocalName ?? normalizedPeripheralID ?? ""
+        self.id = normalizedMacAddress ?? normalizedMac ?? normalizedAddress ?? normalizedLocalName ?? normalizedPeripheralID ?? self.name
         // 设备型号表依赖 NEMR 编号，蓝牙名是 PICKSMART 时也要优先用编号匹配。
-        let profileLookupName = normalizedMacAddress ?? normalizedMac ?? normalizedName ?? self.name
+        let profileLookupName = normalizedMacAddress ?? normalizedMac ?? normalizedAddress ?? normalizedLocalName ?? normalizedName ?? self.name
         self.profile = EInkDeviceProfile.profile(for: profileLookupName)
         let parsedVoltage = BleDevice.parseBatteryVoltage(from: sanitizedRawDevice)
         self.batteryVoltage = parsedVoltage
