@@ -329,7 +329,7 @@ struct SkillsHomeView: View {
                     Spacer(minLength: 8)
                 }
 
-                Text(aiStore.config.provider.title)
+                Text(aiStore.selectedModelTitle)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(primaryTextColor.opacity(0.78))
                     .lineLimit(1)

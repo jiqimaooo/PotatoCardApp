@@ -10,6 +10,8 @@ struct AISkillConfigView: View {
     @State private var apiTestError: AIImageParsedError?
     @State private var showsDebugLogSheet = false
     @State private var isAPIKeyVisible = false
+    @State private var customModelInput = ""
+    @State private var showsCustomModelManager = false
     @State private var apiDebugLogs: [String] = []
 
     var body: some View {
@@ -52,6 +54,10 @@ struct AISkillConfigView: View {
                 }
             )
             .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showsCustomModelManager) {
+            AIModelManagementSheet(store: store)
+                .presentationDetents([.medium, .large])
         }
         .overlay(alignment: .bottom) {
             if let toast = store.toastMessage {
@@ -117,6 +123,7 @@ struct AISkillConfigView: View {
                     get: { store.config.provider },
                     set: { provider in
                         store.updateProvider(provider)
+                        customModelInput = ""
                         apiTestError = nil
                     }
                 )) {
@@ -127,13 +134,66 @@ struct AISkillConfigView: View {
                 .labelsHidden()
             }
             dividerRow
-            textFieldRow(title: "默认模型", text: Binding(
-                get: { store.config.defaultModel },
-                set: { store.updateDefaultModel($0) }
-            ), placeholder: store.config.provider.defaultModel)
+            modelPickerSection
+            dividerRow
+            customModelSection
         }
         .background(cardFillColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(cardStroke)
+    }
+
+    private var modelPickerSection: some View {
+        PickerRow(title: "默认模型") {
+            Picker("默认模型", selection: Binding(
+                get: { store.config.defaultModel },
+                set: { modelID in
+                    store.selectModel(modelID)
+                    apiTestError = nil
+                }
+            )) {
+                ForEach(store.availableModelOptions) { option in
+                    Text(option.title).tag(option.id)
+                }
+            }
+            .labelsHidden()
+        }
+    }
+
+    private var customModelSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                TextField("输入自定义模型 ID ", text: $customModelInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.system(size: 14, weight: .medium))
+                    .padding(.horizontal, 12)
+                    .frame(height: 40)
+                    .background(rowFillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Button("确认") {
+                    store.addCustomModel(customModelInput)
+                    customModelInput = ""
+                    apiTestError = nil
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(accentColor)
+                .disabled(customModelInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Button {
+                showsCustomModelManager = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(store.customModels.isEmpty ? "管理自定义模型" : "管理自定义模型 · \(store.customModels.count)")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(secondaryTextColor)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
     }
 
     private var keySection: some View {
@@ -345,21 +405,6 @@ struct AISkillConfigView: View {
         .overlay(cardStroke)
     }
 
-    private func textFieldRow(title: String, text: Binding<String>, placeholder: String) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(primaryTextColor)
-            TextField(placeholder, text: text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 14, weight: .medium))
-                .multilineTextAlignment(.trailing)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 54)
-    }
-
     private func toggleRow(title: String, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             Text(title)
@@ -455,6 +500,153 @@ struct AISkillConfigView: View {
     }
 }
 
+private struct AIModelManagementSheet: View {
+    @ObservedObject var store: AISkillSettingsStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var pendingDeletionModel: String?
+    @State private var showsDeleteConfirmation = false
+    @State private var showsClearAllConfirmation = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    customModelList
+                }
+                .padding(20)
+            }
+            .background(pageBackgroundColor.ignoresSafeArea())
+            .navigationTitle("自定义模型")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+            .alert("确定删除这个自定义模型吗？", isPresented: $showsDeleteConfirmation) {
+                Button("取消", role: .cancel) {}
+                Button("删除", role: .destructive) {
+                    if let pendingDeletionModel {
+                        store.deleteCustomModel(pendingDeletionModel)
+                    }
+                    pendingDeletionModel = nil
+                }
+            }
+            .alert("确定清空全部自定义模型吗？", isPresented: $showsClearAllConfirmation) {
+                Button("取消", role: .cancel) {}
+                Button("清空", role: .destructive) {
+                    store.clearCustomModels()
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(store.config.provider.title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(primaryTextColor)
+            Text("这里只管理当前模型服务下手动添加的模型，内置模型不会被删除。")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(secondaryTextColor)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(cardStroke)
+    }
+
+    private var customModelList: some View {
+        VStack(spacing: 0) {
+            if store.customModels.isEmpty {
+                Text("暂无自定义模型")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            } else {
+                ForEach(Array(store.customModels.enumerated()), id: \.element) { index, modelID in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(modelID)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(primaryTextColor)
+                                .lineLimit(1)
+                            if store.config.defaultModel == modelID {
+                                Text("当前选中")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                            }
+                        }
+
+                        Spacer()
+
+                        Button {
+                            pendingDeletionModel = modelID
+                            showsDeleteConfirmation = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.red)
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("删除自定义模型")
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 58)
+
+                    if index < store.customModels.count - 1 {
+                        Divider()
+                            .padding(.leading, 16)
+                    }
+                }
+
+                Divider()
+                    .padding(.leading, 16)
+
+                Button {
+                    showsClearAllConfirmation = true
+                } label: {
+                    Text("清空全部自定义模型")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(cardStroke)
+    }
+
+    private var pageBackgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color(red: 0.98, green: 0.98, blue: 0.98)
+    }
+
+    private var cardFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : .white
+    }
+
+    private var cardStroke: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.055), lineWidth: 1)
+    }
+
+    private var primaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.88)
+    }
+
+    private var secondaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.58) : Color.black.opacity(0.52)
+    }
+}
+
 private struct PickerRow<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
@@ -463,8 +655,14 @@ private struct PickerRow<Content: View>: View {
         HStack(spacing: 12) {
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.88))
             Spacer()
             content
+                .foregroundStyle(Color.black.opacity(0.88))
+                .tint(Color.black.opacity(0.88))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(width: 220, alignment: .trailing)
         }
         .padding(.horizontal, 16)
         .frame(height: 54)
