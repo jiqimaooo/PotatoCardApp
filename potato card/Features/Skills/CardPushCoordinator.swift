@@ -46,7 +46,7 @@ final class CardPushCoordinator {
         self.bleService = bleService
     }
 
-    func pushImage(_ image: UIImage) async throws -> String {
+    func pushImage(_ image: UIImage, shouldSaveToGalleryOverride: Bool? = nil) async throws -> String {
         let snapshot = try resolveTargetDeviceSnapshot()
         logger.info("土豆片图片推送：target=\(snapshot.id, privacy: .public), size=\(snapshot.pixelWidth, privacy: .public)x\(snapshot.pixelHeight, privacy: .public)")
         ShortcutDebugLog.log("CardPushCoordinator", "pushImage start target=\(snapshot.id) size=\(snapshot.pixelWidth)x\(snapshot.pixelHeight)")
@@ -62,7 +62,8 @@ final class CardPushCoordinator {
             ditherAlgorithm: algorithm
         )
 
-        if CardPushPreferences.saveImageToGallery {
+        let shouldSaveToGallery = shouldSaveToGalleryOverride ?? CardPushPreferences.saveImageToGallery
+        if shouldSaveToGallery {
             saveToGallery(displayImage, defaultTitle: "图片卡片")
         } else {
             ShortcutDebugLog.log("CardPushCoordinator", "pushImage skip gallery save (pref disabled)")

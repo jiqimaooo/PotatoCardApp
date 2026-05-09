@@ -30,6 +30,8 @@
 	<string>需要使用蓝牙搜索并连接墨水屏设备，用于传输图片。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>需要定位当前城市天气，用于天气技能同步到墨水屏。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要将 AI 生成图片保存到系统照片应用。</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

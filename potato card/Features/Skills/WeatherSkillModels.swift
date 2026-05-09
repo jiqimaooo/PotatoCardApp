@@ -190,7 +190,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         isAutoUpdateEnabled = try container.decodeIfPresent(Bool.self, forKey: .isAutoUpdateEnabled) ?? false
-        // Host 和 Key 现在随技能配置保存在 UserDefaults，卸载重装后会被清空。
+        // 旧版本可能从 UserDefaults 解出 apiKey，Store 会迁移到 Keychain。
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         apiHost = try container.decodeIfPresent(String.self, forKey: .apiHost) ?? ""
         cityMode = try container.decodeIfPresent(WeatherCityMode.self, forKey: .cityMode) ?? .automatic
@@ -217,8 +217,7 @@ struct WeatherSkillConfiguration: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encode(isAutoUpdateEnabled, forKey: .isAutoUpdateEnabled)
-        // 显式编码凭据配置，确保 App 更新时 UserDefaults 能继续保留。
-        try container.encode(apiKey, forKey: .apiKey)
+        // API Key 不再编码进 UserDefaults，持久化交给 Keychain。
         try container.encode(apiHost, forKey: .apiHost)
         try container.encode(cityMode, forKey: .cityMode)
         try container.encode(fixedCityQuery, forKey: .fixedCityQuery)

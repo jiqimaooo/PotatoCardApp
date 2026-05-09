@@ -7,6 +7,7 @@ struct SkillsHomeView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var weatherStore = WeatherSkillStore()
+    @StateObject private var aiStore = AISkillSettingsStore()
     @State private var activeSyncContext: WeatherSkillSyncContext?
     @State private var didHandleActiveSyncSuccess = false
 
@@ -20,6 +21,7 @@ struct SkillsHomeView: View {
                 header
                 weatherSkillCard
                 albumSkillCard
+                aiImageSkillCard
                 shortcutSettingsCard
             }
             .padding(.horizontal, 18)
@@ -28,7 +30,11 @@ struct SkillsHomeView: View {
         }
         .task {
             await weatherStore.onAppear()
+            aiStore.reload()
             backfillTargetDeviceSelectionIfNeeded()
+        }
+        .onAppear {
+            aiStore.reload()
         }
         .onChange(of: bleService.connectedDevice?.id) { _ in
             backfillTargetDeviceSelectionIfNeeded()
@@ -287,6 +293,84 @@ struct SkillsHomeView: View {
         .buttonStyle(.plain)
     }
 
+    private var aiImageSkillCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.30, green: 0.48, blue: 1.00),
+                                    Color(red: 0.75, green: 0.34, blue: 0.98)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 42, height: 42)
+                        .overlay(
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.white)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("AI 生图")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(primaryTextColor)
+
+                        Text("快捷指令生成土豆片图片")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+
+                Text(aiStore.config.provider.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(primaryTextColor.opacity(0.78))
+                    .lineLimit(1)
+
+                Text(aiStore.apiKeyExists ? "已配置 API Key · \(aiStore.config.defaultSize.displayText)" : "配置 API Key 后可在快捷指令中生成")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(aiStore.apiKeyExists ? secondaryTextColor : Color(red: 0.94, green: 0.52, blue: 0.14))
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    NavigationLink {
+                        AISkillConfigView()
+                    } label: {
+                        Text("设置")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Color.clear
+                        .frame(width: 84, height: 38)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            aiImagePreview
+                .frame(width: 88, height: 132)
+        }
+        .padding(14)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
+        .frame(height: skillCardHeight)
+    }
+
     private var weatherPreview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -348,6 +432,38 @@ struct SkillsHomeView: View {
                 }
                 .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.46))
                 .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private var aiImagePreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.10) : Color.white)
+                .shadow(color: Color.black.opacity(0.035), radius: 6, x: 0, y: 3)
+
+            VStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.92, green: 0.95, blue: 1.0),
+                                    Color(red: 0.84, green: 0.78, blue: 1.0)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 58, height: 76)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.30, green: 0.48, blue: 1.0))
+                }
+
+                Text("AI")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.46))
             }
         }
     }
@@ -637,6 +753,7 @@ private struct WeatherSkillDetailView: View {
         }
         .navigationTitle("天气看板")
         .navigationBarTitleDisplayMode(.inline)
+        .dismissKeyboardOnBackgroundTap()
     }
 
     private var previewCard: some View {
@@ -765,7 +882,10 @@ private struct WeatherSkillDetailView: View {
                             get: { store.config.apiKey },
                             set: { store.updateAPIKey($0) }
                         ),
-                        isVisible: $isAPIKeyVisible
+                        isVisible: $isAPIKeyVisible,
+                        onClear: {
+                            store.clearAPIKey()
+                        }
                     )
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -843,7 +963,8 @@ private struct WeatherSkillDetailView: View {
     private func credentialField(
         kind: WeatherCredentialKind,
         text: Binding<String>,
-        isVisible: Binding<Bool>
+        isVisible: Binding<Bool>,
+        onClear: (() -> Void)? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(kind.title)
@@ -880,6 +1001,20 @@ private struct WeatherSkillDetailView: View {
             .padding(.trailing, 8)
             .frame(height: 44)
             .background(Color.black.opacity(colorScheme == .dark ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            if let onClear {
+                Button {
+                    onClear()
+                } label: {
+                    Label("清空 Key", systemImage: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .disabled(text.wrappedValue.trimmed.isEmpty)
+                .opacity(text.wrappedValue.trimmed.isEmpty ? 0.45 : 1)
+            }
         }
     }
 
@@ -1085,6 +1220,7 @@ private struct WeatherCitySelectionView: View {
         }
         .navigationTitle("城市管理")
         .navigationBarTitleDisplayMode(.inline)
+        .dismissKeyboardOnBackgroundTap()
     }
 
     private var commonCityButtons: some View {

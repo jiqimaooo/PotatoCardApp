@@ -6,6 +6,7 @@ import Foundation
 final class WeatherSkillStore: ObservableObject {
     private enum Constants {
         static let configurationKey = "weatherSkillConfiguration"
+        static let apiKeychainKey = "weather.apiKey"
     }
 
     @Published private(set) var config: WeatherSkillConfiguration
@@ -53,9 +54,31 @@ final class WeatherSkillStore: ObservableObject {
     func updateAPIKey(_ value: String) {
         let trimmedValue = value.trimmed
         config.apiKey = trimmedValue
-        // API Key 跟随天气技能配置写入 UserDefaults，卸载 App 后会被系统清空。
+        do {
+            if trimmedValue.isEmpty {
+                try KeychainService.delete(key: Constants.apiKeychainKey)
+            } else {
+                try KeychainService.save(trimmedValue, key: Constants.apiKeychainKey)
+            }
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            return
+        }
+        // API Key 持久化到 Keychain，UserDefaults 只保留 Host、城市和展示配置。
         persistConfiguration()
         loadState = config.hasCredentials ? .idle : .missingCredentials
+    }
+
+    func clearAPIKey() {
+        config.apiKey = ""
+        do {
+            try KeychainService.delete(key: Constants.apiKeychainKey)
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            return
+        }
+        persistConfiguration()
+        loadState = .missingCredentials
     }
 
     func updateAPIHost(_ value: String) {
@@ -227,9 +250,21 @@ final class WeatherSkillStore: ObservableObject {
     private static func loadConfiguration(decoder: JSONDecoder, userDefaults: UserDefaults) -> WeatherSkillConfiguration {
         guard
             let data = userDefaults.data(forKey: Constants.configurationKey),
-            let configuration = try? decoder.decode(WeatherSkillConfiguration.self, from: data)
+            var configuration = try? decoder.decode(WeatherSkillConfiguration.self, from: data)
         else {
-            return WeatherSkillConfiguration()
+            var configuration = WeatherSkillConfiguration()
+            configuration.apiKey = (try? KeychainService.read(key: Constants.apiKeychainKey))?.trimmed ?? ""
+            return configuration
+        }
+
+        let legacyAPIKey = configuration.apiKey.trimmed
+        let keychainAPIKey = (try? KeychainService.read(key: Constants.apiKeychainKey))?.trimmed ?? ""
+        if !keychainAPIKey.isEmpty {
+            configuration.apiKey = keychainAPIKey
+        } else if !legacyAPIKey.isEmpty {
+            // 兼容旧版本 UserDefaults 明文 Key，首次读取后迁移进 Keychain。
+            try? KeychainService.save(legacyAPIKey, key: Constants.apiKeychainKey)
+            configuration.apiKey = legacyAPIKey
         }
 
         return configuration

@@ -77,6 +77,16 @@ struct PotatoCardShortcutsProvider: AppShortcutsProvider {
                 ],
                 shortTitle: "推送文字到土豆片",
                 systemImageName: "text.alignleft"
+            ),
+            AppShortcut(
+                intent: AIImageShortcutIntent(),
+                phrases: [
+                    "用\(.applicationName)AI 生图",
+                    "在\(.applicationName)运行 AI 生图",
+                    "\(.applicationName)生成图片"
+                ],
+                shortTitle: "AI 生图",
+                systemImageName: "sparkles"
             )
         ]
     }
