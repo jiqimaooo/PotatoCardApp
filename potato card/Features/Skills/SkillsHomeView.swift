@@ -21,7 +21,6 @@ struct SkillsHomeView: View {
                 weatherSkillCard
                 albumSkillCard
                 shortcutSettingsCard
-                upcomingSkillCard
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
@@ -236,42 +235,6 @@ struct SkillsHomeView: View {
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
         .frame(height: skillCardHeight)
-    }
-
-    private var upcomingSkillCard: some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(red: 0.95, green: 0.96, blue: 0.98))
-                .frame(width: 42, height: 42)
-                .overlay(
-                    Image(systemName: "calendar")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Color(red: 0.52, green: 0.54, blue: 0.60))
-                )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("日历看板")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(primaryTextColor)
-                Text("展示日程和重要安排")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(secondaryTextColor)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 10)
-
-            Text("即将上线")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(red: 1.0, green: 0.56, blue: 0.16))
-        }
-        .padding(14)
-        .background(cardFillColor.opacity(0.95), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(cardStrokeColor, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.10 : 0.025), radius: 8, x: 0, y: 3)
     }
 
     private var shortcutSettingsCard: some View {

@@ -32,6 +32,11 @@ enum EInkDitherAlgorithm: String, CaseIterable, Identifiable, Codable {
     case sierraLite
     case bayer8x8
     case nearestColor
+    case originalBW
+    case originalBWRY
+    case original7Color
+    case original6Color
+    case original1600Split
 
     var id: String { rawValue }
 
@@ -47,6 +52,16 @@ enum EInkDitherAlgorithm: String, CaseIterable, Identifiable, Codable {
             return "Bayer 8x8"
         case .nearestColor:
             return "Nearest Color"
+        case .originalBW:
+            return "原始算法 1"
+        case .originalBWRY:
+            return "原始算法 2"
+        case .original7Color:
+            return "原始算法 3"
+        case .original6Color:
+            return "原始算法 4"
+        case .original1600Split:
+            return "原始算法 5"
         }
     }
 
@@ -62,6 +77,25 @@ enum EInkDitherAlgorithm: String, CaseIterable, Identifiable, Codable {
             return "规则网格，适合插画文字"
         case .nearestColor:
             return "不抖动，直接映射 6 色"
+        case .originalBW:
+            return "原始黑白调色板 + Floyd 抖动"
+        case .originalBWRY:
+            return "原始黑白红黄调色板 + Floyd 抖动"
+        case .original7Color:
+            return "原始 7/8 色调色板 + Floyd 抖动"
+        case .original6Color:
+            return "原始 6 色调色板 + Floyd 抖动"
+        case .original1600Split:
+            return "1600x1200 原始 6 色 + Floyd 抖动"
+        }
+    }
+
+    var isOriginalColorMapping: Bool {
+        switch self {
+        case .originalBW, .originalBWRY, .original7Color, .original6Color, .original1600Split:
+            return true
+        case .floydSteinberg, .atkinson, .sierraLite, .bayer8x8, .nearestColor:
+            return false
         }
     }
 }
@@ -123,6 +157,10 @@ enum EInkImageRenderer {
         )
         let rotatedImage = fittedImage.rotated180ForEInkTransfer()
 
+        if ditherAlgorithm.isOriginalColorMapping {
+            return renderOriginalColorMapping(rotatedImage, algorithm: ditherAlgorithm)
+        }
+
         switch profile.colorMode {
         case .sixColor:
             return renderSixColor(rotatedImage, algorithm: ditherAlgorithm)
@@ -178,7 +216,51 @@ enum EInkImageRenderer {
             applyErrorDiffusion(to: &context.pixels, width: width, height: height, kernel: EInkDiffusionKernel.atkinson)
         case .sierraLite:
             applyErrorDiffusion(to: &context.pixels, width: width, height: height, kernel: EInkDiffusionKernel.sierraLite)
+        case .originalBW, .originalBWRY, .original7Color, .original6Color, .original1600Split:
+            applyOriginalColorMapping(to: &context.pixels, width: width, height: height, algorithm: algorithm)
         }
+
+        guard let provider = CGDataProvider(data: Data(context.pixels) as CFData),
+              let output = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: context.bytesPerRow,
+                space: context.colorSpace,
+                bitmapInfo: CGBitmapInfo(rawValue: context.bitmapInfo),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+              )
+        else {
+            return image
+        }
+
+        return UIImage(cgImage: output, scale: 1, orientation: .up)
+    }
+
+    private static func renderOriginalColorMapping(_ image: UIImage, algorithm: EInkDitherAlgorithm) -> UIImage {
+        guard let cgImage = image.cgImage else { return image }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        guard width > 0, height > 0 else { return image }
+
+        guard let context = SixColorBitmapContext(cgImage: cgImage, width: width, height: height) else {
+            return image
+        }
+
+        // convert.js 里的原始算法本身是硬阈值映射，照片会丢大量灰阶。
+        // 这里保留原始颜色集合，但先用 Floyd-Steinberg 扩散误差，让真机照片保留更多层次。
+        applyErrorDiffusion(
+            to: &context.pixels,
+            width: width,
+            height: height,
+            kernel: EInkDiffusionKernel.floydSteinberg,
+            palette: originalPalette(for: algorithm)
+        )
 
         guard let provider = CGDataProvider(data: Data(context.pixels) as CFData),
               let output = CGImage(
@@ -235,11 +317,200 @@ enum EInkImageRenderer {
         }
     }
 
+    private static func applyOriginalColorMapping(
+        to pixels: inout [UInt8],
+        width: Int,
+        height: Int,
+        algorithm: EInkDitherAlgorithm
+    ) {
+        for pixelIndex in 0..<(width * height) {
+            let sourceIndex = pixelIndex * 4
+            let red = pixels[sourceIndex]
+            let green = pixels[sourceIndex + 1]
+            let blue = pixels[sourceIndex + 2]
+            let color = originalMappedColor(red: red, green: green, blue: blue, algorithm: algorithm)
+            write(color, to: &pixels, pixelIndex: pixelIndex)
+        }
+    }
+
+    private static func originalPalette(for algorithm: EInkDitherAlgorithm) -> [EInkDitherColor] {
+        switch algorithm {
+        case .originalBW:
+            return [
+                EInkOriginalColorCode.black.color,
+                EInkOriginalColorCode.white.color
+            ]
+        case .originalBWRY:
+            return [
+                EInkOriginalColorCode.black.color,
+                EInkOriginalColorCode.white.color,
+                EInkOriginalColorCode.red.color,
+                EInkOriginalColorCode.yellow.color
+            ]
+        case .original7Color:
+            return [
+                EInkOriginalColorCode.black.color,
+                EInkOriginalColorCode.white.color,
+                EInkOriginalColorCode.yellow.color,
+                EInkOriginalColorCode.red.color,
+                EInkOriginalColorCode.orange.color,
+                EInkOriginalColorCode.blue.color,
+                EInkOriginalColorCode.green.color
+            ]
+        case .original6Color, .original1600Split:
+            return [
+                EInkOriginalColorCode.black.color,
+                EInkOriginalColorCode.white.color,
+                EInkOriginalColorCode.yellow.color,
+                EInkOriginalColorCode.red.color,
+                EInkOriginalColorCode.blue.color,
+                EInkOriginalColorCode.green.color
+            ]
+        case .floydSteinberg, .atkinson, .sierraLite, .bayer8x8, .nearestColor:
+            return EInkSixColorPalette.colors
+        }
+    }
+
+    private static func originalMappedColor(
+        red: UInt8,
+        green: UInt8,
+        blue: UInt8,
+        algorithm: EInkDitherAlgorithm
+    ) -> EInkDitherColor {
+        let threshold: UInt8 = 128
+        let redOn = red > threshold
+        let greenOn = green > threshold
+        let blueOn = blue > threshold
+
+        switch algorithm {
+        case .originalBW:
+            return originalLuminance(red: red, green: green, blue: blue) > Double(threshold)
+                ? EInkOriginalColorCode.white.color
+                : EInkOriginalColorCode.black.color
+        case .originalBWRY:
+            return originalBWRYColor(
+                red: red,
+                green: green,
+                blue: blue,
+                redOn: redOn,
+                greenOn: greenOn,
+                blueOn: blueOn
+            )
+        case .original7Color:
+            return original7Color(
+                red: red,
+                green: green,
+                blue: blue,
+                redOn: redOn,
+                greenOn: greenOn,
+                blueOn: blueOn
+            )
+        case .original6Color, .original1600Split:
+            // convertColors1600x1200 的差异主要是字节分屏排列；当前 SDK 接收 UIImage，
+            // 所以视觉颜色映射与 convertColors 保持一致，由 SDK 继续负责底层打包。
+            return original6Color(redOn: redOn, greenOn: greenOn, blueOn: blueOn)
+        case .floydSteinberg, .atkinson, .sierraLite, .bayer8x8, .nearestColor:
+            return EInkDitherColor(red: Double(red), green: Double(green), blue: Double(blue))
+        }
+    }
+
+    private static func originalBWRYColor(
+        red: UInt8,
+        green: UInt8,
+        blue: UInt8,
+        redOn: Bool,
+        greenOn: Bool,
+        blueOn: Bool
+    ) -> EInkDitherColor {
+        if redOn && greenOn && !blueOn {
+            return EInkOriginalColorCode.yellow.color
+        }
+
+        if redOn && !greenOn && !blueOn {
+            return EInkOriginalColorCode.red.color
+        }
+
+        return originalLuminance(red: red, green: green, blue: blue) > 128
+            ? EInkOriginalColorCode.white.color
+            : EInkOriginalColorCode.black.color
+    }
+
+    private static func original7Color(
+        red: UInt8,
+        green: UInt8,
+        blue: UInt8,
+        redOn: Bool,
+        greenOn: Bool,
+        blueOn: Bool
+    ) -> EInkDitherColor {
+        if !redOn && !greenOn && !blueOn {
+            return EInkOriginalColorCode.black.color
+        }
+
+        if redOn && greenOn && blueOn {
+            return EInkOriginalColorCode.white.color
+        }
+
+        if redOn && !blueOn {
+            if green > 0xA5 {
+                return EInkOriginalColorCode.yellow.color
+            }
+            if green > 0x45 {
+                return EInkOriginalColorCode.orange.color
+            }
+            return EInkOriginalColorCode.red.color
+        }
+
+        if !redOn && greenOn && !blueOn {
+            return EInkOriginalColorCode.green.color
+        }
+
+        if !redOn && !greenOn && blueOn {
+            return EInkOriginalColorCode.blue.color
+        }
+
+        return EInkOriginalColorCode.white.color
+    }
+
+    private static func original6Color(redOn: Bool, greenOn: Bool, blueOn: Bool) -> EInkDitherColor {
+        if !redOn && !greenOn && !blueOn {
+            return EInkOriginalColorCode.black.color
+        }
+
+        if redOn && greenOn && blueOn {
+            return EInkOriginalColorCode.white.color
+        }
+
+        if redOn && greenOn && !blueOn {
+            return EInkOriginalColorCode.yellow.color
+        }
+
+        if redOn && !greenOn && !blueOn {
+            return EInkOriginalColorCode.red.color
+        }
+
+        if !redOn && !greenOn && blueOn {
+            return EInkOriginalColorCode.blue.color
+        }
+
+        if !redOn && greenOn && !blueOn {
+            return EInkOriginalColorCode.green.color
+        }
+
+        return EInkOriginalColorCode.white.color
+    }
+
+    private static func originalLuminance(red: UInt8, green: UInt8, blue: UInt8) -> Double {
+        // convert.js 的 lumG 看起来少了小数点；这里按常规 0.30/0.59/0.11 灰度权重复刻阈值意图。
+        Double(red) * 0.30 + Double(green) * 0.59 + Double(blue) * 0.11
+    }
+
     private static func applyErrorDiffusion(
         to pixels: inout [UInt8],
         width: Int,
         height: Int,
-        kernel: [EInkDiffusionStep]
+        kernel: [EInkDiffusionStep],
+        palette: [EInkDitherColor] = EInkSixColorPalette.colors
     ) {
         let bytesPerPixel = 4
         var working = [Double](repeating: 0, count: width * height * 3)
@@ -250,8 +521,6 @@ enum EInkImageRenderer {
             working[workIndex + 1] = Double(pixels[sourceIndex + 1])
             working[workIndex + 2] = Double(pixels[sourceIndex + 2])
         }
-
-        let palette = EInkSixColorPalette.colors
 
         for y in 0..<height {
             for x in 0..<width {
@@ -410,6 +679,35 @@ private final class SixColorBitmapContext {
         }
 
         guard didDraw else { return nil }
+    }
+}
+
+private enum EInkOriginalColorCode: Int {
+    case black = 0
+    case white = 1
+    case yellow = 2
+    case red = 3
+    case orange = 4
+    case blue = 5
+    case green = 6
+
+    var color: EInkDitherColor {
+        switch self {
+        case .black:
+            return EInkDitherColor(red: 0, green: 0, blue: 0)
+        case .white:
+            return EInkDitherColor(red: 255, green: 255, blue: 255)
+        case .yellow:
+            return EInkDitherColor(red: 255, green: 255, blue: 0)
+        case .red:
+            return EInkDitherColor(red: 255, green: 0, blue: 0)
+        case .orange:
+            return EInkDitherColor(red: 255, green: 128, blue: 0)
+        case .blue:
+            return EInkDitherColor(red: 0, green: 0, blue: 255)
+        case .green:
+            return EInkDitherColor(red: 0, green: 160, blue: 0)
+        }
     }
 }
 

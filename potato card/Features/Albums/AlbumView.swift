@@ -158,11 +158,6 @@ private struct AlbumImageViewer: View {
     }
 
     var body: some View {
-        let buttonTextColor = Color.white
-        let buttonFillColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
-        let secondaryTextColor = colorScheme == .dark ? Color.white.opacity(0.82) : Color.black.opacity(0.72)
-        let primaryButtonFillColor = Color(red: 0.0, green: 0.48, blue: 1.0)
-
         NavigationStack {
             ZStack {
                 (colorScheme == .dark ? Color.black : Color.white)
@@ -177,35 +172,19 @@ private struct AlbumImageViewer: View {
                         transferStatusView
 
                         Button(action: transferSelectedAlbumDirectly) {
-                            Text("传输到设备")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(buttonTextColor)
-                                .padding(.horizontal, 18)
-                                .frame(height: 38)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(primaryButtonFillColor)
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(primaryButtonFillColor.opacity(0.16), lineWidth: 1)
-                                )
+                            transferButtonLabel
                         }
                         .buttonStyle(.plain)
                         .disabled(activeDevice == nil)
 
                         Button(action: openManualAdjustment) {
-                            Text("手动调整")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(secondaryTextColor)
-                                .padding(.horizontal, 16)
-                                .frame(height: 36)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(buttonFillColor.opacity(0.72))
-                                )
+                            Label("手动调整", systemImage: "slider.horizontal.3")
+                                .frame(minWidth: 100)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.regular)
+                        .tint(.secondary)
                         .disabled(isTransferInProgress)
                     }
                     .padding(.bottom, 10)
@@ -252,10 +231,7 @@ private struct AlbumImageViewer: View {
 
     @ViewBuilder
     private var transferStatusView: some View {
-        if isTransferInProgress {
-            ProgressView(value: bleService.transferProgress)
-                .frame(width: 150)
-        } else if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
+        if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
             Text(errorMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red)
@@ -313,6 +289,38 @@ private struct AlbumImageViewer: View {
 
     private var isTransferInProgress: Bool {
         bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
+    }
+
+    private var primaryTransferButtonFillColor: Color {
+        Color(red: 0.0, green: 0.48, blue: 1.0)
+    }
+
+    private var transferProgressPercent: Int {
+        min(100, max(0, Int((bleService.transferProgress * 100).rounded())))
+    }
+
+    private var transferButtonProgressTitle: String {
+        switch bleService.transferPhase {
+        case .preparing:
+            return "等待 \(transferProgressPercent)%"
+        case .transferring:
+            return "传输中 \(transferProgressPercent)%"
+        default:
+            return "传输到设备"
+        }
+    }
+
+    private var transferButtonLabel: some View {
+        TransferProgressButtonLabel(
+            title: "传输到设备",
+            progressTitle: transferButtonProgressTitle,
+            progress: bleService.transferProgress,
+            isInProgress: isTransferInProgress,
+            width: 140,
+            height: 38,
+            cornerRadius: 19,
+            accentColor: primaryTransferButtonFillColor
+        )
     }
 
     private var albumFramedPreview: some View {
