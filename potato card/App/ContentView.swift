@@ -79,6 +79,7 @@ struct ContentView: View {
             beginInitialAutoScanIfNeeded()
             loadTransferredPhotoImage()
             scheduleSafeTabPrewarmIfNeeded()
+            // 队列 flush 在 onChange(of: scenePhase → .active) 里统一触发，避免与 onAppear 双重并发调用。
         }
         .onChange(of: selectedTab) { tab in
             loadedTabs.insert(tab)
@@ -87,6 +88,7 @@ struct ContentView: View {
             switch phase {
             case .active:
                 bleService.handleSceneBecameActive()
+                Task { await CardPushCoordinator.shared.flushPendingTasksIfNeeded() }
             case .background:
                 bleService.handleSceneEnteredBackground()
             default:

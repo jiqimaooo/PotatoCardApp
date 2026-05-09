@@ -10,6 +10,7 @@ struct GalleryView: View {
     let onTransferToDevice: (Data) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var photos: [GalleryPhoto] = []
     @State private var selectedPhotoSet: SelectedPhotoSet?
@@ -37,6 +38,12 @@ struct GalleryView: View {
         }
         .task(id: selectedItems) {
             await importSelectedItems()
+        }
+        .onChange(of: scenePhase) { phase in
+            // 后台快捷指令可能在 App 不在前台时写入新的图库条目，
+            // 重新回前台时从磁盘合并一次，避免列表停在旧状态。
+            guard phase == .active else { return }
+            Task { await refreshNewPhotosFromDisk() }
         }
         .sheet(item: $selectedPhotoSet) { set in
             GalleryImageViewer(
@@ -174,6 +181,27 @@ struct GalleryView: View {
 
         guard photos.isEmpty else { return }
         photos = cachedPhotos
+    }
+
+    // 从后台回前台时调用：只拾磁盘头部那些在内存里不存在的新 id。
+    // GalleryCacheStore.appendPhoto 总是 insert(at: 0)，所以新照片一定在磁盘索引的前缀。
+    private func refreshNewPhotosFromDisk() async {
+        let cached = await Task.detached(priority: .utility) {
+            GalleryCacheStore.loadPhotos()
+        }.value
+
+        guard !cached.isEmpty else { return }
+
+        if photos.isEmpty {
+            photos = cached
+            return
+        }
+
+        let knownIDs = Set(photos.map(\.id))
+        let newPhotos = Array(cached.prefix(while: { !knownIDs.contains($0.id) }))
+        guard !newPhotos.isEmpty else { return }
+
+        photos.insert(contentsOf: newPhotos, at: 0)
     }
 
     private func deletePhoto(_ photo: GalleryPhoto) {
