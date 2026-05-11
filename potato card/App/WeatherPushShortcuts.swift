@@ -87,6 +87,43 @@ struct PotatoCardShortcutsProvider: AppShortcutsProvider {
                 ],
                 shortTitle: "AI 生图",
                 systemImageName: "sparkles"
+            ),
+            AppShortcut(
+                intent: HealthPushIntent(),
+                phrases: [
+                    "用\(.applicationName)推送健康看板",
+                    "在\(.applicationName)运行健康看板",
+                    "\(.applicationName)健康看板推送"
+                ],
+                shortTitle: "健康看板推送",
+                systemImageName: "heart.text.square"
+            ),
+            AppShortcut(
+                intent: HealthSleepPushIntent(),
+                phrases: [
+                    "用\(.applicationName)推送睡眠看板",
+                    "\(.applicationName)推送睡眠"
+                ],
+                shortTitle: "推送睡眠看板",
+                systemImageName: "moon.zzz.fill"
+            ),
+            AppShortcut(
+                intent: HealthFitnessPushIntent(),
+                phrases: [
+                    "用\(.applicationName)推送健身看板",
+                    "\(.applicationName)推送健身"
+                ],
+                shortTitle: "推送健身看板",
+                systemImageName: "figure.run"
+            ),
+            AppShortcut(
+                intent: HealthDailyPushIntent(),
+                phrases: [
+                    "用\(.applicationName)推送一日总结",
+                    "\(.applicationName)推送一日总结"
+                ],
+                shortTitle: "推送一日总结",
+                systemImageName: "sun.max.fill"
             )
         ]
     }

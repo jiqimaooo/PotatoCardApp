@@ -20,6 +20,7 @@ struct SkillsHomeView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 weatherSkillCard
+                healthSkillSection
                 albumSkillCard
                 aiImageSkillCard
                 shortcutSettingsCard
@@ -161,6 +162,13 @@ struct SkillsHomeView: View {
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
         .frame(height: skillCardHeight)
+    }
+
+    // 健康看板入口卡片。具体实现拆到 HealthSkillView 里，
+    // SkillsHomeView 只负责把它嵌进现有技能列表。
+    private var healthSkillSection: some View {
+        HealthSkillSectionView()
+            .environmentObject(bleService)
     }
 
     private var albumSkillCard: some View {

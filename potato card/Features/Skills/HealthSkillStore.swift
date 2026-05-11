@@ -1,0 +1,182 @@
+//
+//  HealthSkillStore.swift
+//  potato card
+//
+//  健康看板的运行时状态：配置持久化、权限请求、各模式快照刷新。
+//  与天气技能一致，只读 + 单一可信源；快捷指令也通过这个 store 拉数据。
+//
+
+import Combine
+import Foundation
+
+@MainActor
+final class HealthSkillStore: ObservableObject {
+    private enum Constants {
+        static let configurationKey = "healthSkillConfiguration"
+    }
+
+    @Published private(set) var config: HealthSkillConfiguration
+    @Published private(set) var snapshot: HealthSnapshot?
+    @Published private(set) var loadState: HealthSkillLoadState = .idle
+
+    private let service = HealthDataService.shared
+    private let userDefaults: UserDefaults
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        self.config = Self.loadConfiguration(decoder: JSONDecoder(), userDefaults: userDefaults)
+    }
+
+    var skill: Skill {
+        let summary: String
+        if let snapshot {
+            summary = Self.summary(for: snapshot)
+        } else {
+            summary = config.defaultMode.summary
+        }
+        return .health(summary: summary, configuration: config)
+    }
+
+    var isHealthDataAvailable: Bool {
+        service.isAvailable
+    }
+
+    // 进入设置页时调用一次，避免首次开关报无授权错误。
+    func onAppear() async {
+        guard service.isAvailable else {
+            loadState = .failed(HealthSkillError.healthDataUnavailable.localizedDescription)
+            return
+        }
+        // 第一次进入主动请求一次合集授权，之后只读取。用户取消授权也不再骚扰。
+        if !config.didRequestAuthorization {
+            await requestAuthorization()
+        }
+    }
+
+    func updateEnabled(_ isEnabled: Bool) {
+        config.isEnabled = isEnabled
+        persistConfiguration()
+        if isEnabled {
+            // 开启技能时主动请求权限，与天气“同步时更新”体验一致。
+            Task { await requestAuthorization() }
+        }
+    }
+
+    func updateDefaultMode(_ mode: HealthDashboardMode) {
+        config.defaultMode = mode
+        persistConfiguration()
+    }
+
+    func updateImageAlgorithm(_ algorithm: EInkDitherAlgorithm) {
+        config.imageAlgorithm = algorithm
+        persistConfiguration()
+    }
+
+    func updateTargetDeviceID(_ deviceID: String) {
+        config.targetDeviceID = deviceID
+        if config.targetDeviceSnapshot?.id != deviceID {
+            config.targetDeviceSnapshot = nil
+        }
+        persistConfiguration()
+    }
+
+    func updateTargetDevice(_ device: BleDevice) {
+        config.targetDeviceID = device.id
+        config.targetDeviceSnapshot = device.targetSnapshot
+        persistConfiguration()
+    }
+
+    func updateTargetDeviceSnapshot(_ snapshot: WeatherTargetDeviceSnapshot) {
+        config.targetDeviceID = snapshot.id
+        config.targetDeviceSnapshot = snapshot
+        persistConfiguration()
+    }
+
+    // 主动触发授权弹窗，写到 config 标记已请求过。
+    func requestAuthorization() async {
+        do {
+            try await service.requestAuthorizationForAllModes()
+            config.didRequestAuthorization = true
+            persistConfiguration()
+            if loadState == .missingAuthorization {
+                loadState = .idle
+            }
+        } catch {
+            // HealthKit 抛错通常是权限或不支持。
+            loadState = .failed(error.localizedDescription)
+        }
+    }
+
+    func refresh(mode: HealthDashboardMode? = nil) async {
+        guard config.isEnabled else {
+            loadState = .idle
+            return
+        }
+        guard service.isAvailable else {
+            loadState = .failed(HealthSkillError.healthDataUnavailable.localizedDescription)
+            return
+        }
+
+        let targetMode = mode ?? config.defaultMode
+        loadState = .loading
+        do {
+            switch targetMode {
+            case .sleep:
+                let value = try await service.fetchSleepSnapshot()
+                snapshot = .sleep(value)
+            case .fitness:
+                let value = try await service.fetchFitnessSnapshot()
+                snapshot = .fitness(value)
+            case .daily:
+                let value = try await service.fetchDailySnapshot()
+                snapshot = .daily(value)
+            }
+            loadState = .loaded
+        } catch let HealthSkillError.noData(mode) {
+            loadState = .failed(HealthSkillError.noData(mode).localizedDescription)
+        } catch {
+            // HealthKit 授权未通过时通常表现为没有数据可读。
+            loadState = .failed(error.localizedDescription)
+        }
+    }
+
+    func markSynced(mode: HealthDashboardMode) {
+        config.lastSyncAt = Date()
+        config.lastSyncMode = mode
+        persistConfiguration()
+    }
+
+    private func persistConfiguration() {
+        guard let data = try? encoder.encode(config) else { return }
+        userDefaults.set(data, forKey: Constants.configurationKey)
+    }
+
+    private static func loadConfiguration(decoder: JSONDecoder, userDefaults: UserDefaults) -> HealthSkillConfiguration {
+        guard
+            let data = userDefaults.data(forKey: Constants.configurationKey),
+            let configuration = try? decoder.decode(HealthSkillConfiguration.self, from: data)
+        else {
+            return HealthSkillConfiguration()
+        }
+        return configuration
+    }
+
+    // 看板卡片预览文案。
+    private static func summary(for snapshot: HealthSnapshot) -> String {
+        switch snapshot.mode {
+        case .sleep:
+            guard let sleep = snapshot.sleep else { return HealthDashboardMode.sleep.summary }
+            let hours = Int(sleep.inBedDuration / 3600)
+            let minutes = Int((sleep.inBedDuration.truncatingRemainder(dividingBy: 3600)) / 60)
+            return "昨晚\(hours)h\(minutes)m"
+        case .fitness:
+            guard let fitness = snapshot.fitness else { return HealthDashboardMode.fitness.summary }
+            return "今日\(Int(fitness.activeEnergyKcal.rounded()))kcal · \(fitness.stepCount)步"
+        case .daily:
+            guard let daily = snapshot.daily else { return HealthDashboardMode.daily.summary }
+            return "今日\(Int(daily.fitness.activeEnergyKcal.rounded()))kcal · \(daily.fitness.stepCount)步"
+        }
+    }
+}
