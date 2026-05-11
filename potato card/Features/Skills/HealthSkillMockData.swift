@@ -39,7 +39,7 @@ enum HealthSkillMockData {
         activeEnergyGoalKcal: 500,
         exerciseMinutes: 22,
         exerciseGoalMinutes: 30,
-        standHours: 8,
+        standHours: 9,
         standGoalHours: 12,
         stepCount: 7423,
         distanceMeters: 5482,
@@ -53,7 +53,9 @@ enum HealthSkillMockData {
         sleep: sleep,
         restingHeartRate: 56,
         avgHeartRate: 78,
-        mindfulMinutes: 10
+        mindfulMinutes: 10,
+        weightKg: 62.4,
+        weightKgLastWeek: 62.9
     )
 
     static func snapshot(for mode: HealthDashboardMode) -> HealthSnapshot {

@@ -117,6 +117,9 @@ struct HealthDailySnapshot: Equatable {
     let restingHeartRate: Double?
     let avgHeartRate: Double?
     let mindfulMinutes: Double
+    // “总结”模块需要的趋势数据：今日体重 + 上周同期体重。两者都可能为 nil。
+    let weightKg: Double?
+    let weightKgLastWeek: Double?
 }
 
 struct HealthSnapshot: Equatable {

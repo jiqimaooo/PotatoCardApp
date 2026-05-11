@@ -47,7 +47,11 @@ final class HealthDataService: @unchecked Sendable {
         case .fitness:
             insertQuantity(into: &types, identifier: .activeEnergyBurned)
             insertQuantity(into: &types, identifier: .appleExerciseTime)
+            // 站立时长（appleStandTime）按分钟累加，appleStandHour 是分类样本，按“小时计数”表达 Apple Watch 站立环的真实读数，两者都收。
             insertQuantity(into: &types, identifier: .appleStandTime)
+            if let standHour = HKObjectType.categoryType(forIdentifier: .appleStandHour) {
+                types.insert(standHour)
+            }
             insertQuantity(into: &types, identifier: .stepCount)
             insertQuantity(into: &types, identifier: .distanceWalkingRunning)
             types.insert(HKObjectType.workoutType())
@@ -60,6 +64,8 @@ final class HealthDataService: @unchecked Sendable {
             types.formUnion(readTypes(for: .fitness))
             insertQuantity(into: &types, identifier: .heartRate)
             insertQuantity(into: &types, identifier: .restingHeartRate)
+            // 一日总结底部“总结”模块会拿体重和上一周对比，做趋势提示。
+            insertQuantity(into: &types, identifier: .bodyMass)
             if let mindful = HKObjectType.categoryType(forIdentifier: .mindfulSession) {
                 types.insert(mindful)
             }
@@ -219,7 +225,10 @@ final class HealthDataService: @unchecked Sendable {
 
         async let activeEnergy = sumQuantity(store: store, identifier: .activeEnergyBurned, unit: .kilocalorie(), predicate: predicate)
         async let exerciseMinutes = sumQuantity(store: store, identifier: .appleExerciseTime, unit: .minute(), predicate: predicate)
-        async let standHours = sumQuantity(store: store, identifier: .appleStandTime, unit: .minute(), predicate: predicate)
+        // 站立小时：优先用 appleStandHour 分类样本（与 Apple Watch 三环一致），
+        // 没有这份数据再回退到 appleStandTime（分钟累加）。
+        async let standHoursFromCategory = countStandHours(store: store, predicate: predicate)
+        async let standMinutesQuantity = sumQuantity(store: store, identifier: .appleStandTime, unit: .minute(), predicate: predicate)
         async let stepCount = sumQuantity(store: store, identifier: .stepCount, unit: .count(), predicate: predicate)
         async let distance = sumQuantity(store: store, identifier: .distanceWalkingRunning, unit: .meter(), predicate: predicate)
         async let workouts = fetchWorkouts(store: store, predicate: predicate)
@@ -227,14 +236,16 @@ final class HealthDataService: @unchecked Sendable {
 
         let energyValue = await activeEnergy
         let exerciseValue = await exerciseMinutes
-        let standMinutes = await standHours
+        let standCategoryHours = await standHoursFromCategory
+        let standMinutes = await standMinutesQuantity
         let stepsValue = await stepCount
         let distanceValue = await distance
         let workoutList = await workouts
         let summaryValue = await summary
 
         let workoutDuration = workoutList.reduce(0.0) { $0 + $1.duration }
-        let standHoursValue = standMinutes / 60.0
+        // 取“分类小时计数”和“分钟换算小时”里较大的那个，避免 appleStandHour 在部分设备未被记录时漏算。
+        let standHoursValue = max(Double(standCategoryHours), standMinutes / 60.0)
 
         let hasAnyData = energyValue > 0 || exerciseValue > 0 || stepsValue > 0 || distanceValue > 0 || workoutList.count > 0
         guard hasAnyData else { throw HealthSkillError.noData(.fitness) }
@@ -274,9 +285,21 @@ final class HealthDataService: @unchecked Sendable {
         async let avgHR = averageQuantity(store: store, identifier: .heartRate, unit: HKUnit(from: "count/min"), predicate: predicate)
         async let mindful = sumCategoryDuration(store: store, identifier: .mindfulSession, predicate: predicate)
 
+        // 体重 + 上周末同期体重，做趋势对比给“总结”模块用。
+        let weekAgo = calendar.date(byAdding: .day, value: -7, to: now) ?? now
+        async let bodyMassNow = latestSampleValue(store: store, identifier: .bodyMass, unit: HKUnit.gramUnit(with: .kilo))
+        async let bodyMassWeekAgo = latestSampleValue(
+            store: store,
+            identifier: .bodyMass,
+            unit: HKUnit.gramUnit(with: .kilo),
+            before: weekAgo
+        )
+
         let resting = await restingHR
         let avg = await avgHR
         let mindfulValue = await mindful / 60.0 // 秒 → 分钟
+        let weight = await bodyMassNow
+        let weightLastWeek = await bodyMassWeekAgo
 
         return HealthDailySnapshot(
             date: now,
@@ -284,7 +307,9 @@ final class HealthDataService: @unchecked Sendable {
             sleep: sleep,
             restingHeartRate: resting,
             avgHeartRate: avg,
-            mindfulMinutes: mindfulValue
+            mindfulMinutes: mindfulValue,
+            weightKg: weight,
+            weightKgLastWeek: weightLastWeek
         )
     }
 
@@ -338,13 +363,30 @@ final class HealthDataService: @unchecked Sendable {
         }
     }
 
-    private func latestSampleValue(store: HKHealthStore, identifier: HKQuantityTypeIdentifier, unit: HKUnit) async -> Double? {
+    private func latestSampleValue(store: HKHealthStore, identifier: HKQuantityTypeIdentifier, unit: HKUnit, before: Date? = nil) async -> Double? {
         guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return nil }
+        let predicate: NSPredicate? = before.map { HKQuery.predicateForSamples(withStart: nil, end: $0, options: []) }
         return await withCheckedContinuation { continuation in
             let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
-            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
                 let value = (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit)
                 continuation.resume(returning: value)
+            }
+            store.execute(query)
+        }
+    }
+
+    // 统计 appleStandHour 分类样本里“已站立”状态的个数。对应 Apple Watch 三环里的站立环刻度。
+    private func countStandHours(store: HKHealthStore, predicate: NSPredicate) async -> Int {
+        guard let type = HKObjectType.categoryType(forIdentifier: .appleStandHour) else { return 0 }
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                let categorySamples = (samples as? [HKCategorySample]) ?? []
+                let stoodCount = categorySamples.reduce(0) { count, sample in
+                    // HKCategoryValueAppleStandHour.stood == 0
+                    sample.value == HKCategoryValueAppleStandHour.stood.rawValue ? count + 1 : count
+                }
+                continuation.resume(returning: stoodCount)
             }
             store.execute(query)
         }

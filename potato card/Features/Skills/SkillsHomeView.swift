@@ -577,16 +577,27 @@ struct SkillsHomeView: View {
     }
 
     private func startWeatherSync() {
-        guard !isWeatherSyncing, let context = makeSyncContext() else { return }
-        activeSyncContext = context
-        didHandleActiveSyncSuccess = false
-        // 前台“立即同步”也要显式透传天气模块自己的算法，不能回落到全局算法。
-        bleService.transfer(
-            image: context.transferImage,
-            displayImage: context.displayImage,
-            to: context.device,
-            algorithm: weatherStore.config.imageAlgorithm
-        )
+        guard !isWeatherSyncing else { return }
+        // 同步时先刷新一次天气，避免推送出去的是缓存里的老数据。
+        // 没有 credentials / 关闭技能 时 refreshWeather 自身会直接 return，
+        // 这里就走原来的 snapshot 分支（要么不构造 context，要么用最近一次成功的 snapshot）。
+        Task {
+            if weatherStore.config.hasCredentials, weatherStore.config.isEnabled {
+                await weatherStore.refreshWeather()
+            }
+            await MainActor.run {
+                guard let context = makeSyncContext() else { return }
+                activeSyncContext = context
+                didHandleActiveSyncSuccess = false
+                // 前台“立即同步”也要显式透传天气模块自己的算法，不能回落到全局算法。
+                bleService.transfer(
+                    image: context.transferImage,
+                    displayImage: context.displayImage,
+                    to: context.device,
+                    algorithm: weatherStore.config.imageAlgorithm
+                )
+            }
+        }
     }
 
     private func handleTransferPhaseChange(_ phase: TransferPhase) {
