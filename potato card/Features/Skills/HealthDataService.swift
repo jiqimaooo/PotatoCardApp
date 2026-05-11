@@ -247,8 +247,8 @@ final class HealthDataService: @unchecked Sendable {
         // 取“分类小时计数”和“分钟换算小时”里较大的那个，避免 appleStandHour 在部分设备未被记录时漏算。
         let standHoursValue = max(Double(standCategoryHours), standMinutes / 60.0)
 
-        let hasAnyData = energyValue > 0 || exerciseValue > 0 || stepsValue > 0 || distanceValue > 0 || workoutList.count > 0
-        guard hasAnyData else { throw HealthSkillError.noData(.fitness) }
+        // 即便所有数值都是 0（例如刚授权完、当天还没开始活动），也返回一份零值快照，
+        // 让看板能展示「今天还没动」而不是退回到通用占位图。
 
         return HealthFitnessSnapshot(
             date: now,

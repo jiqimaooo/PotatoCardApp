@@ -270,6 +270,14 @@ struct HealthSkillDetailView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Color.black.opacity(0.08), lineWidth: 1)
                 )
+            // 实时把读取状态打出来，避免再出现「页面只显示占位图但用户已经授权」的情况下
+            // 看不到错误原因。
+            Text(store.loadState.message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(loadStateColor)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
             HStack(spacing: 10) {
                 Text("400 x 600 墨水屏预览")
                     .font(.system(size: 12, weight: .medium))
@@ -301,6 +309,19 @@ struct HealthSkillDetailView: View {
             return HealthSkillRenderer.renderDisplayImage(snapshot: snapshot, targetSize: CGSize(width: 400, height: 600))
         }
         return HealthSkillRenderer.renderPlaceholder(mode: store.config.defaultMode)
+    }
+
+    private var loadStateColor: Color {
+        switch store.loadState {
+        case .failed, .missingAuthorization:
+            return Color(red: 0.85, green: 0.22, blue: 0.18)
+        case .loading:
+            return .secondary
+        case .loaded:
+            return Color(red: 0.18, green: 0.55, blue: 0.30)
+        case .idle:
+            return .secondary
+        }
     }
 
     private var modeSelector: some View {

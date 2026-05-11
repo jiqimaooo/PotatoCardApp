@@ -110,10 +110,9 @@ final class HealthSkillStore: ObservableObject {
     }
 
     func refresh(mode: HealthDashboardMode? = nil) async {
-        guard config.isEnabled else {
-            loadState = .idle
-            return
-        }
+        // 进入详情页查看数据不应被「开关 / 推送启用」挡住，开关只控制
+        // 后台同步和推送行为。这里把 isEnabled 守卫去掉，让用户授权后
+        // 一定能在 UI 上看到当前 HealthKit 真实数据（或一份空态）。
         guard service.isAvailable else {
             loadState = .failed(HealthSkillError.healthDataUnavailable.localizedDescription)
             return
@@ -134,8 +133,18 @@ final class HealthSkillStore: ObservableObject {
                 snapshot = .daily(value)
             }
             loadState = .loaded
-        } catch let HealthSkillError.noData(mode) {
-            loadState = .failed(HealthSkillError.noData(mode).localizedDescription)
+        } catch let HealthSkillError.noData(noDataMode) {
+            // 真的没数据时，构造一个对应模式的空 snapshot，让 renderer 走
+            // mode-specific 空态（"尚未读到最近一晚的睡眠数据" / "今日还没动" 等），
+            // 而不是回到通用占位图。
+            snapshot = HealthSnapshot(
+                mode: noDataMode,
+                updatedAt: Date(),
+                sleep: nil,
+                fitness: nil,
+                daily: nil
+            )
+            loadState = .failed(HealthSkillError.noData(noDataMode).localizedDescription)
         } catch {
             // HealthKit 授权未通过时通常表现为没有数据可读。
             loadState = .failed(error.localizedDescription)
