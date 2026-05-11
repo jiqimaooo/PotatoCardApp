@@ -63,7 +63,8 @@ enum HealthDashboardMode: String, Codable, CaseIterable, Identifiable {
 }
 
 struct HealthSkillConfiguration: Codable, Equatable {
-    var isEnabled = true
+    // 健康看板默认关闭。开关由用户主动打开，第一次打开时才请求 HealthKit 授权。
+    var isEnabled = false
     var defaultMode: HealthDashboardMode = .daily
     // 健康看板复用全局图像算法不太合适——墨水屏上文字密度更高，默认仍走 Bayer 8x8。
     var imageAlgorithm: EInkDitherAlgorithm = .bayer8x8
@@ -77,7 +78,7 @@ struct HealthSkillConfiguration: Codable, Equatable {
     init() {}
 }
 
-// 渲染层用到的睡眠数据：起止时间 + 各阶段时长。
+// 渲染层用到的睡眠数据：起止时间 + 各阶段时长 + 睡眠期间的生理指标。
 struct HealthSleepSnapshot: Equatable {
     let bedtime: Date
     let wakeTime: Date
@@ -87,6 +88,12 @@ struct HealthSleepSnapshot: Equatable {
     let remDuration: TimeInterval
     let coreDuration: TimeInterval
     let awakeDuration: TimeInterval
+    // 睡眠期间生理指标，缺数据时为 nil，渲染层会显示 "—"。
+    let averageHeartRate: Double?
+    let minHeartRate: Double?
+    let respiratoryRate: Double?
+    let bloodOxygenAverage: Double?
+    let heartRateVariability: Double?
 }
 
 struct HealthFitnessSnapshot: Equatable {

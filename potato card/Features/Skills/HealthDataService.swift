@@ -39,6 +39,11 @@ final class HealthDataService: @unchecked Sendable {
             if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
                 types.insert(sleep)
             }
+            // 睡眠看板会展示心率 / 呼吸 / 血氧 / HRV，这些都按 quantity type 读取。
+            insertQuantity(into: &types, identifier: .heartRate)
+            insertQuantity(into: &types, identifier: .respiratoryRate)
+            insertQuantity(into: &types, identifier: .oxygenSaturation)
+            insertQuantity(into: &types, identifier: .heartRateVariabilitySDNN)
         case .fitness:
             insertQuantity(into: &types, identifier: .activeEnergyBurned)
             insertQuantity(into: &types, identifier: .appleExerciseTime)
@@ -170,6 +175,20 @@ final class HealthDataService: @unchecked Sendable {
         let fallbackInBed = sessionEnd.timeIntervalSince(sessionStart)
         let effectiveInBed = inBed > 0 ? inBed : fallbackInBed
 
+        // 睡眠期间生理指标：复用同一时间窗，缺数据时返回 nil（看板里会显示 "—"）。
+        let vitalsPredicate = HKQuery.predicateForSamples(withStart: sessionStart, end: sessionEnd, options: .strictStartDate)
+        async let avgHR = averageQuantity(store: store, identifier: .heartRate, unit: HKUnit(from: "count/min"), predicate: vitalsPredicate)
+        async let minHR = minQuantity(store: store, identifier: .heartRate, unit: HKUnit(from: "count/min"), predicate: vitalsPredicate)
+        async let respRate = averageQuantity(store: store, identifier: .respiratoryRate, unit: HKUnit(from: "count/min"), predicate: vitalsPredicate)
+        async let spo2 = averageQuantity(store: store, identifier: .oxygenSaturation, unit: HKUnit.percent(), predicate: vitalsPredicate)
+        async let hrv = averageQuantity(store: store, identifier: .heartRateVariabilitySDNN, unit: HKUnit.secondUnit(with: .milli), predicate: vitalsPredicate)
+
+        let avgHRValue = await avgHR
+        let minHRValue = await minHR
+        let respValue = await respRate
+        let spo2Value = await spo2
+        let hrvValue = await hrv
+
         return HealthSleepSnapshot(
             bedtime: sessionStart,
             wakeTime: sessionEnd,
@@ -178,7 +197,13 @@ final class HealthDataService: @unchecked Sendable {
             deepDuration: deep,
             remDuration: rem,
             coreDuration: core,
-            awakeDuration: awake
+            awakeDuration: awake,
+            averageHeartRate: avgHRValue,
+            minHeartRate: minHRValue,
+            respiratoryRate: respValue,
+            // HealthKit 的 oxygenSaturation 单位是百分比（0~1），转成 0~100 方便渲染层处理。
+            bloodOxygenAverage: spo2Value.map { $0 * 100 },
+            heartRateVariability: hrvValue
         )
     }
 
@@ -296,6 +321,17 @@ final class HealthDataService: @unchecked Sendable {
         return await withCheckedContinuation { continuation in
             let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .discreteAverage) { _, statistics, _ in
                 let value = statistics?.averageQuantity()?.doubleValue(for: unit)
+                continuation.resume(returning: value)
+            }
+            store.execute(query)
+        }
+    }
+
+    private func minQuantity(store: HKHealthStore, identifier: HKQuantityTypeIdentifier, unit: HKUnit, predicate: NSPredicate) async -> Double? {
+        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return nil }
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .discreteMin) { _, statistics, _ in
+                let value = statistics?.minimumQuantity()?.doubleValue(for: unit)
                 continuation.resume(returning: value)
             }
             store.execute(query)

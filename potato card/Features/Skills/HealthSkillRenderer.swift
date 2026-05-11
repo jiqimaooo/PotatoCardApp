@@ -96,99 +96,195 @@ enum HealthSkillRenderer {
             return
         }
 
-        // 主指标：总在床时长
+        // ── 顶部主指标：总在床时长 + 入睡/起床时间 ─────────────────
         let totalDuration = snapshot.inBedDuration
         let (hours, minutes) = hoursMinutes(from: totalDuration)
-        drawMetricBlock(
-            primary: "\(hours)",
-            primaryUnit: "h",
-            secondary: "\(minutes)",
-            secondaryUnit: "min",
-            caption: "总在床时长",
-            origin: CGPoint(x: Layout.outerMargin, y: 130),
-            in: context,
-            accent: Palette.accentSleep
+        drawText(
+            "\(hours)",
+            font: .systemFont(ofSize: 80, weight: .bold),
+            color: Palette.outline,
+            rect: CGRect(x: Layout.outerMargin, y: 126, width: 110, height: 88),
+            alignment: .left
+        )
+        drawText(
+            "h",
+            font: .systemFont(ofSize: 22, weight: .semibold),
+            color: Palette.accentSleep,
+            rect: CGRect(x: Layout.outerMargin + 92, y: 168, width: 24, height: 28),
+            alignment: .left
+        )
+        drawText(
+            "\(minutes)",
+            font: .systemFont(ofSize: 40, weight: .bold),
+            color: Palette.outline,
+            rect: CGRect(x: Layout.outerMargin + 118, y: 148, width: 64, height: 48),
+            alignment: .left
+        )
+        drawText(
+            "min",
+            font: .systemFont(ofSize: 15, weight: .semibold),
+            color: Palette.accentSleep,
+            rect: CGRect(x: Layout.outerMargin + 118, y: 192, width: 40, height: 18),
+            alignment: .left
+        )
+        drawText(
+            "总在床时长",
+            font: .systemFont(ofSize: 13, weight: .medium),
+            color: Palette.secondaryText,
+            rect: CGRect(x: Layout.outerMargin, y: 220, width: 170, height: 18),
+            alignment: .left
         )
 
-        // 入睡/起床时间
+        // 右上：入睡/起床（紧凑两列，整体右边距留 16px 与画布边缘对齐）
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm"
-        let timeY: CGFloat = 130
-        let timeOriginX: CGFloat = 232
+        let timeOriginX: CGFloat = 212
+        let timeColumnWidth: CGFloat = 86
         drawText(
-            "入睡 " + timeFormatter.string(from: snapshot.bedtime),
-            font: .systemFont(ofSize: 20, weight: .semibold),
-            color: Palette.outline,
-            rect: CGRect(x: timeOriginX, y: timeY + 12, width: 152, height: 28),
-            alignment: .left
-        )
-        drawText(
-            "起床 " + timeFormatter.string(from: snapshot.wakeTime),
-            font: .systemFont(ofSize: 20, weight: .semibold),
-            color: Palette.outline,
-            rect: CGRect(x: timeOriginX, y: timeY + 50, width: 152, height: 28),
-            alignment: .left
-        )
-        drawText(
-            String(format: "实际入睡 %dh%dm", Int(snapshot.asleepDuration) / 3600, (Int(snapshot.asleepDuration) % 3600) / 60),
-            font: .systemFont(ofSize: 15, weight: .medium),
+            "入睡",
+            font: .systemFont(ofSize: 12, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: timeOriginX, y: timeY + 90, width: 156, height: 22),
+            rect: CGRect(x: timeOriginX, y: 116, width: timeColumnWidth, height: 16),
+            alignment: .left
+        )
+        drawText(
+            timeFormatter.string(from: snapshot.bedtime),
+            font: .monospacedDigitSystemFont(ofSize: 24, weight: .bold),
+            color: Palette.outline,
+            rect: CGRect(x: timeOriginX, y: 132, width: timeColumnWidth, height: 30),
+            alignment: .left
+        )
+        drawText(
+            "起床",
+            font: .systemFont(ofSize: 12, weight: .medium),
+            color: Palette.secondaryText,
+            rect: CGRect(x: timeOriginX + timeColumnWidth, y: 116, width: timeColumnWidth, height: 16),
+            alignment: .left
+        )
+        drawText(
+            timeFormatter.string(from: snapshot.wakeTime),
+            font: .monospacedDigitSystemFont(ofSize: 24, weight: .bold),
+            color: Palette.outline,
+            rect: CGRect(x: timeOriginX + timeColumnWidth, y: 132, width: timeColumnWidth, height: 30),
+            alignment: .left
+        )
+        let asleepMinutes = Int(snapshot.asleepDuration / 60)
+        drawText(
+            String(format: "实际入睡 %dh%dm", asleepMinutes / 60, asleepMinutes % 60),
+            font: .systemFont(ofSize: 12, weight: .medium),
+            color: Palette.secondaryText,
+            rect: CGRect(x: timeOriginX, y: 168, width: 172, height: 18),
             alignment: .left
         )
 
-        drawDivider(y: 282, in: context)
+        drawDivider(y: 248, in: context)
 
-        // 各阶段进度条
+        // ── 睡眠阶段进度条 ────────────────────────────────────────
         let stages: [(String, TimeInterval, UIColor)] = [
             ("深睡", snapshot.deepDuration, UIColor(red: 0.13, green: 0.20, blue: 0.55, alpha: 1)),
             ("REM", snapshot.remDuration, UIColor(red: 0.29, green: 0.43, blue: 0.85, alpha: 1)),
             ("核心", snapshot.coreDuration, UIColor(red: 0.46, green: 0.62, blue: 0.92, alpha: 1)),
             ("清醒", snapshot.awakeDuration, UIColor(red: 0.92, green: 0.66, blue: 0.18, alpha: 1))
         ]
-
-        // 总样本时间用 max(各阶段之和, asleep) 防止分母为 0。
         let stageSum = stages.reduce(0.0) { $0 + $1.1 }
         let denominator = max(stageSum, snapshot.asleepDuration, 1)
 
-        let listOrigin = CGPoint(x: Layout.outerMargin, y: 310)
-        let rowHeight: CGFloat = 38
+        let listOrigin = CGPoint(x: Layout.outerMargin, y: 268)
+        let rowHeight: CGFloat = 30
         for (index, stage) in stages.enumerated() {
             let y = listOrigin.y + CGFloat(index) * rowHeight
-            // 标签
             drawText(
                 stage.0,
-                font: .systemFont(ofSize: 17, weight: .semibold),
+                font: .systemFont(ofSize: 14, weight: .semibold),
                 color: Palette.outline,
-                rect: CGRect(x: listOrigin.x, y: y, width: 60, height: 24),
+                rect: CGRect(x: listOrigin.x, y: y + 2, width: 48, height: 18),
                 alignment: .left
             )
-            // 时长文字
             let stageMinutes = Int(stage.1 / 60)
             let stageH = stageMinutes / 60
             let stageM = stageMinutes % 60
             let durationLabel = stageH > 0 ? "\(stageH)h\(stageM)m" : "\(stageM)m"
             drawText(
                 durationLabel,
-                font: .monospacedDigitSystemFont(ofSize: 15, weight: .medium),
+                font: .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
                 color: Palette.secondaryText,
-                rect: CGRect(x: listOrigin.x + 64, y: y, width: 64, height: 24),
+                rect: CGRect(x: listOrigin.x + 50, y: y + 2, width: 56, height: 18),
                 alignment: .left
             )
-            // 进度条
-            let barOriginX = listOrigin.x + 134
-            let barWidth: CGFloat = Layout.canvasSize.width - 2 * Layout.outerMargin - 134
-            let trackRect = CGRect(x: barOriginX, y: y + 8, width: barWidth, height: 10)
+            let barOriginX = listOrigin.x + 112
+            let barWidth: CGFloat = Layout.canvasSize.width - 2 * Layout.outerMargin - 112
+            let trackRect = CGRect(x: barOriginX, y: y + 6, width: barWidth, height: 10)
             let fillFraction = CGFloat(max(0, min(1, stage.1 / denominator)))
             drawBar(track: trackRect, fillColor: stage.2, fraction: fillFraction, in: context)
         }
 
-        // 底部注脚
-        drawFootnote(
-            "数据来自健康 App · 仅供参考",
-            y: 560,
-            in: context
+        // ── 生理指标：心率 / 呼吸 / 血氧 / HRV ──────────────────────
+        drawDivider(y: 400, in: context)
+        drawText(
+            "睡眠期间生理指标",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.secondaryText,
+            rect: CGRect(x: Layout.outerMargin, y: 412, width: 220, height: 18),
+            alignment: .left
         )
+
+        // 2x2 网格放四个指标
+        let vitalsOriginY: CGFloat = 438
+        let cellWidth: CGFloat = (Layout.canvasSize.width - 2 * Layout.outerMargin) / 2
+        let cellHeight: CGFloat = 56
+        let vitalsCells: [(String, String, String)] = [
+            ("平均心率", snapshot.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "—", "bpm"),
+            ("最低心率", snapshot.minHeartRate.map { "\(Int($0.rounded()))" } ?? "—", "bpm"),
+            ("呼吸频率", snapshot.respiratoryRate.map { String(format: "%.1f", $0) } ?? "—", "次/分"),
+            ("血氧", snapshot.bloodOxygenAverage.map { String(format: "%.1f", $0) } ?? "—", "%")
+        ]
+        for (index, cell) in vitalsCells.enumerated() {
+            let col = index % 2
+            let row = index / 2
+            let originX = Layout.outerMargin + CGFloat(col) * cellWidth
+            let originY = vitalsOriginY + CGFloat(row) * cellHeight
+            drawText(
+                cell.0,
+                font: .systemFont(ofSize: 12, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: originX, y: originY, width: cellWidth - 8, height: 16),
+                alignment: .left
+            )
+            drawText(
+                cell.1,
+                font: .monospacedDigitSystemFont(ofSize: 24, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: originX, y: originY + 16, width: cellWidth - 56, height: 28),
+                alignment: .left
+            )
+            drawText(
+                cell.2,
+                font: .systemFont(ofSize: 12, weight: .semibold),
+                color: Palette.secondaryText,
+                rect: CGRect(x: originX + cellWidth - 60, y: originY + 24, width: 52, height: 18),
+                alignment: .right
+            )
+        }
+
+        // HRV 单独一行（如果有数据）
+        if let hrv = snapshot.heartRateVariability {
+            drawText(
+                "心率变异性 (HRV)",
+                font: .systemFont(ofSize: 12, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: Layout.outerMargin, y: 552, width: 200, height: 16),
+                alignment: .left
+            )
+            drawText(
+                String(format: "%.0f ms", hrv),
+                font: .monospacedDigitSystemFont(ofSize: 14, weight: .semibold),
+                color: Palette.outline,
+                rect: CGRect(x: Layout.canvasSize.width - Layout.outerMargin - 120, y: 552, width: 120, height: 18),
+                alignment: .right
+            )
+        } else {
+            drawFootnote("数据来自健康 App", y: 556, in: context)
+        }
     }
 
     // MARK: - 健身看板
@@ -201,88 +297,129 @@ enum HealthSkillRenderer {
             return
         }
 
-        // 活动三环
-        let ringCenter = CGPoint(x: 122, y: 270)
-        let ringRadii: [CGFloat] = [82, 64, 46]
+        // ── 上半区：左 = 活动三环；右 = 三个环对应的核心数值 ─────────
+        let ringCenter = CGPoint(x: 108, y: 246)
+        let ringRadii: [CGFloat] = [78, 60, 42]
         let ringColors = [Palette.ringEnergy, Palette.ringExercise, Palette.ringStand]
+        let energyGoal = snapshot.activeEnergyGoalKcal ?? 400
+        let exerciseGoal = snapshot.exerciseGoalMinutes ?? 30
+        let standGoal = snapshot.standGoalHours ?? 12
         let ringValues: [Double] = [
-            fraction(of: snapshot.activeEnergyKcal, goal: snapshot.activeEnergyGoalKcal ?? 400),
-            fraction(of: snapshot.exerciseMinutes, goal: snapshot.exerciseGoalMinutes ?? 30),
-            fraction(of: snapshot.standHours, goal: snapshot.standGoalHours ?? 12)
+            fraction(of: snapshot.activeEnergyKcal, goal: energyGoal),
+            fraction(of: snapshot.exerciseMinutes, goal: exerciseGoal),
+            fraction(of: snapshot.standHours, goal: standGoal)
         ]
-
         for index in 0..<3 {
             drawRing(
                 center: ringCenter,
                 radius: ringRadii[index],
-                thickness: 14,
+                thickness: 12,
                 trackColor: Palette.ringTrack,
                 fillColor: ringColors[index],
                 fraction: CGFloat(ringValues[index]),
                 in: context
             )
         }
-
-        // 右侧主指标
-        let energyOrigin = CGPoint(x: 232, y: 156)
-        drawMetricLine(
-            value: "\(Int(snapshot.activeEnergyKcal.rounded()))",
-            unit: "千卡",
-            caption: "活动能量",
-            origin: energyOrigin,
-            accent: Palette.ringEnergy,
-            in: context
-        )
-        drawMetricLine(
-            value: "\(Int(snapshot.exerciseMinutes.rounded()))",
-            unit: "分钟",
-            caption: "运动时间",
-            origin: CGPoint(x: 232, y: 222),
-            accent: Palette.ringExercise,
-            in: context
-        )
-        drawMetricLine(
-            value: String(format: "%.1f", snapshot.standHours),
-            unit: "小时",
-            caption: "站立",
-            origin: CGPoint(x: 232, y: 288),
-            accent: Palette.ringStand,
-            in: context
+        drawText(
+            "活动",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.secondaryText,
+            rect: CGRect(x: 38, y: 332, width: 140, height: 18),
+            alignment: .center
         )
 
-        drawDivider(y: 372, in: context)
+        // 右侧三行：与活动三环颜色对应
+        let metricsX: CGFloat = 208
+        let metricsRows: [(UIColor, String, String, String)] = [
+            (Palette.ringEnergy, "活动能量", "\(Int(snapshot.activeEnergyKcal.rounded()))", "/\(Int(energyGoal)) 千卡"),
+            (Palette.ringExercise, "运动时间", "\(Int(snapshot.exerciseMinutes.rounded()))", "/\(Int(exerciseGoal)) 分钟"),
+            (Palette.ringStand, "站立小时", String(format: "%.0f", snapshot.standHours), "/\(Int(standGoal)) 小时")
+        ]
+        for (index, row) in metricsRows.enumerated() {
+            let y = 142 + CGFloat(index) * 70
+            // 色点
+            row.0.setFill()
+            context.fillEllipse(in: CGRect(x: metricsX, y: y + 12, width: 10, height: 10))
+            drawText(
+                row.1,
+                font: .systemFont(ofSize: 12, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: metricsX + 18, y: y, width: 160, height: 16),
+                alignment: .left
+            )
+            drawText(
+                row.2,
+                font: .monospacedDigitSystemFont(ofSize: 32, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: metricsX + 18, y: y + 14, width: 120, height: 40),
+                alignment: .left
+            )
+            drawText(
+                row.3,
+                font: .systemFont(ofSize: 12, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: metricsX + 18, y: y + 50, width: 160, height: 16),
+                alignment: .left
+            )
+        }
 
-        // 步数 / 距离 / 训练
+        // ── 下半区：步数 / 距离 / 训练 ──────────────────────────────
+        drawDivider(y: 388, in: context)
+        drawText(
+            "今日运动",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.secondaryText,
+            rect: CGRect(x: Layout.outerMargin, y: 402, width: 200, height: 18),
+            alignment: .left
+        )
+
+        // 2x2 网格，明确尺寸，避免与底部 footnote 重叠。
+        let gridOriginY: CGFloat = 430
+        let cellWidth: CGFloat = (Layout.canvasSize.width - 2 * Layout.outerMargin) / 2
+        let cellHeight: CGFloat = 70
         let stepsKm = snapshot.distanceMeters / 1000.0
-        drawStatRow(
-            entries: [
-                (title: "步数", value: "\(snapshot.stepCount)", unit: "步"),
-                (title: "距离", value: String(format: "%.2f", stepsKm), unit: "km")
-            ],
-            y: 396,
-            in: context
-        )
+        let workoutMinutes = Int(snapshot.workoutDuration / 60)
+        let gridEntries: [(String, String, String)] = [
+            ("步数", "\(snapshot.stepCount)", "步"),
+            ("距离", String(format: "%.2f", stepsKm), "km"),
+            ("训练次数", "\(snapshot.workoutCount)", "次"),
+            ("训练时长", workoutMinutes == 0 ? "—" : "\(workoutMinutes)", "分钟")
+        ]
+        for (index, entry) in gridEntries.enumerated() {
+            let col = index % 2
+            let row = index / 2
+            let originX = Layout.outerMargin + CGFloat(col) * cellWidth
+            let originY = gridOriginY + CGFloat(row) * cellHeight
+            drawText(
+                entry.0,
+                font: .systemFont(ofSize: 12, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: originX, y: originY, width: cellWidth - 8, height: 16),
+                alignment: .left
+            )
+            drawText(
+                entry.1,
+                font: .monospacedDigitSystemFont(ofSize: 28, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: originX, y: originY + 16, width: cellWidth - 56, height: 34),
+                alignment: .left
+            )
+            drawText(
+                entry.2,
+                font: .systemFont(ofSize: 12, weight: .semibold),
+                color: Palette.secondaryText,
+                rect: CGRect(x: originX + cellWidth - 60, y: originY + 28, width: 52, height: 18),
+                alignment: .right
+            )
+        }
 
-        let workoutDurationMinutes = Int(snapshot.workoutDuration / 60)
-        let workoutDurationLabel = workoutDurationMinutes == 0 ? "—" : "\(workoutDurationMinutes)"
-        drawStatRow(
-            entries: [
-                (title: "训练次数", value: "\(snapshot.workoutCount)", unit: "次"),
-                (title: "训练时长", value: workoutDurationLabel, unit: "min")
-            ],
-            y: 470,
-            in: context
-        )
-
-        drawFootnote(
-            "Apple 活动 · 数据来自健康 App",
-            y: 560,
-            in: context
-        )
+        // 取消 footnote，避免 2x2 网格底部和注脚视觉冲突。
     }
 
     // MARK: - 一日总结看板
 
+    // 简化版：一日总结只展示最关键的“今日活动 + 心率 + 昨晚睡眠”，
+    // 不再罗列健身看板和睡眠看板里的所有指标，避免重复。
     private static func drawDaily(snapshot: HealthDailySnapshot?, updatedAt: Date, in context: CGContext) {
         drawHeader(title: "一日总结", accent: Palette.accentDaily, updatedAt: updatedAt, in: context)
 
@@ -291,222 +428,224 @@ enum HealthSkillRenderer {
             return
         }
 
-        // 顶部：日期 + 概览
-        let calendar = Calendar.current
+        // ── 顶部：日期 + 心率（静息）─────────────────────────────
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "M月d日"
         let weekdayFormatter = DateFormatter()
         weekdayFormatter.locale = Locale(identifier: "zh_CN")
         weekdayFormatter.dateFormat = "EEEE"
-
-        let monthFormatter = DateFormatter()
-        monthFormatter.dateFormat = "M月d日"
-
         drawText(
             monthFormatter.string(from: snapshot.date),
-            font: .systemFont(ofSize: 26, weight: .bold),
+            font: .systemFont(ofSize: 30, weight: .bold),
             color: Palette.outline,
-            rect: CGRect(x: Layout.outerMargin, y: 124, width: 220, height: 32),
+            rect: CGRect(x: Layout.outerMargin, y: 124, width: 220, height: 36),
             alignment: .left
         )
         drawText(
             weekdayFormatter.string(from: snapshot.date),
-            font: .systemFont(ofSize: 18, weight: .medium),
+            font: .systemFont(ofSize: 16, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: Layout.outerMargin, y: 158, width: 220, height: 24),
+            rect: CGRect(x: Layout.outerMargin, y: 162, width: 220, height: 22),
             alignment: .left
         )
 
-        // 右上：心率
-        let restingLabel: String
-        if let resting = snapshot.restingHeartRate {
-            restingLabel = "\(Int(resting.rounded()))"
-        } else {
-            restingLabel = "—"
-        }
-        let avgLabel: String
-        if let avg = snapshot.avgHeartRate {
-            avgLabel = "\(Int(avg.rounded()))"
-        } else {
-            avgLabel = "—"
-        }
+        // 右上：静息心率
+        let restingLabel = snapshot.restingHeartRate.map { "\(Int($0.rounded()))" } ?? "—"
         drawText(
             "静息心率",
-            font: .systemFont(ofSize: 13, weight: .medium),
+            font: .systemFont(ofSize: 12, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: 230, y: 124, width: 156, height: 16),
+            rect: CGRect(x: 240, y: 128, width: 146, height: 16),
             alignment: .right
         )
         drawText(
-            "\(restingLabel) bpm",
-            font: .systemFont(ofSize: 22, weight: .bold),
+            restingLabel,
+            font: .monospacedDigitSystemFont(ofSize: 30, weight: .bold),
             color: Palette.outline,
-            rect: CGRect(x: 230, y: 142, width: 156, height: 28),
+            rect: CGRect(x: 240, y: 146, width: 110, height: 38),
             alignment: .right
         )
         drawText(
-            "今日平均 \(avgLabel) bpm",
-            font: .systemFont(ofSize: 13, weight: .medium),
-            color: Palette.secondaryText,
-            rect: CGRect(x: 230, y: 172, width: 156, height: 16),
-            alignment: .right
+            "bpm",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.accentDaily,
+            rect: CGRect(x: 354, y: 158, width: 32, height: 20),
+            alignment: .left
         )
 
-        drawDivider(y: 202, in: context)
-        _ = calendar // 抹掉未使用警告，calendar 当前仅用于日期 formatter 构造的占位。
+        drawDivider(y: 200, in: context)
 
-        // 健身环（缩小版）
-        let ringCenter = CGPoint(x: 90, y: 296)
-        let radii: [CGFloat] = [62, 48, 34]
-        let colors = [Palette.ringEnergy, Palette.ringExercise, Palette.ringStand]
+        // ── 中段：今日活动（三环 + 三个数字）────────────────────
+        drawText(
+            "今日活动",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.secondaryText,
+            rect: CGRect(x: Layout.outerMargin, y: 212, width: 200, height: 18),
+            alignment: .left
+        )
+
+        let ringCenter = CGPoint(x: 96, y: 308)
+        let ringRadii: [CGFloat] = [60, 46, 32]
+        let ringColors = [Palette.ringEnergy, Palette.ringExercise, Palette.ringStand]
+        let energyGoal = snapshot.fitness.activeEnergyGoalKcal ?? 400
+        let exerciseGoal = snapshot.fitness.exerciseGoalMinutes ?? 30
+        let standGoal = snapshot.fitness.standGoalHours ?? 12
         let fractions: [Double] = [
-            fraction(of: snapshot.fitness.activeEnergyKcal, goal: snapshot.fitness.activeEnergyGoalKcal ?? 400),
-            fraction(of: snapshot.fitness.exerciseMinutes, goal: snapshot.fitness.exerciseGoalMinutes ?? 30),
-            fraction(of: snapshot.fitness.standHours, goal: snapshot.fitness.standGoalHours ?? 12)
+            fraction(of: snapshot.fitness.activeEnergyKcal, goal: energyGoal),
+            fraction(of: snapshot.fitness.exerciseMinutes, goal: exerciseGoal),
+            fraction(of: snapshot.fitness.standHours, goal: standGoal)
         ]
         for i in 0..<3 {
             drawRing(
                 center: ringCenter,
-                radius: radii[i],
-                thickness: 12,
+                radius: ringRadii[i],
+                thickness: 10,
                 trackColor: Palette.ringTrack,
-                fillColor: colors[i],
+                fillColor: ringColors[i],
                 fraction: CGFloat(fractions[i]),
                 in: context
             )
         }
-        drawText(
-            "活动",
-            font: .systemFont(ofSize: 14, weight: .semibold),
-            color: Palette.secondaryText,
-            rect: CGRect(x: 28, y: 372, width: 124, height: 18),
-            alignment: .center
-        )
 
-        // 右侧：健身核心指标
-        let metricsOriginX: CGFloat = 188
-        drawDailyStatBlock(
-            title: "活动能量",
-            value: "\(Int(snapshot.fitness.activeEnergyKcal.rounded()))",
-            unit: "千卡",
-            origin: CGPoint(x: metricsOriginX, y: 220),
-            in: context
-        )
-        drawDailyStatBlock(
-            title: "运动时间",
-            value: "\(Int(snapshot.fitness.exerciseMinutes.rounded()))",
-            unit: "分钟",
-            origin: CGPoint(x: metricsOriginX + 102, y: 220),
-            in: context
-        )
-        drawDailyStatBlock(
-            title: "步数",
-            value: "\(snapshot.fitness.stepCount)",
-            unit: "步",
-            origin: CGPoint(x: metricsOriginX, y: 292),
-            in: context
-        )
-
-        let kmText = String(format: "%.2f", snapshot.fitness.distanceMeters / 1000.0)
-        drawDailyStatBlock(
-            title: "距离",
-            value: kmText,
-            unit: "km",
-            origin: CGPoint(x: metricsOriginX + 102, y: 292),
-            in: context
-        )
-
-        drawDivider(y: 406, in: context)
-
-        // 底部：睡眠 + 正念
-        if let sleep = snapshot.sleep {
-            let totalMinutes = Int(sleep.inBedDuration / 60)
-            let label = String(format: "%dh%dm", totalMinutes / 60, totalMinutes % 60)
-            drawDailyStatBlock(
-                title: "昨晚睡眠",
-                value: label,
-                unit: "",
-                origin: CGPoint(x: Layout.outerMargin, y: 432),
-                in: context,
-                valueFontSize: 28
-            )
-            let asleepMinutes = Int(sleep.asleepDuration / 60)
+        // 右侧三个核心数字 + 右对齐的中文单位（往左收一格留出右边距）
+        let metricsX: CGFloat = 188
+        let activityRows: [(UIColor, String, String)] = [
+            (Palette.ringEnergy, "\(Int(snapshot.fitness.activeEnergyKcal.rounded()))", "千卡"),
+            (Palette.ringExercise, "\(Int(snapshot.fitness.exerciseMinutes.rounded()))", "运动分钟"),
+            (Palette.ringStand, String(format: "%.0f", snapshot.fitness.standHours), "站立小时")
+        ]
+        for (index, row) in activityRows.enumerated() {
+            let y = 230 + CGFloat(index) * 48
+            row.0.setFill()
+            context.fillEllipse(in: CGRect(x: metricsX, y: y + 14, width: 10, height: 10))
             drawText(
-                String(format: "深 %dm · REM %dm", Int(sleep.deepDuration / 60), Int(sleep.remDuration / 60)),
-                font: .systemFont(ofSize: 13, weight: .medium),
-                color: Palette.secondaryText,
-                rect: CGRect(x: Layout.outerMargin, y: 498, width: 178, height: 18),
+                row.1,
+                font: .monospacedDigitSystemFont(ofSize: 28, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: metricsX + 18, y: y, width: 86, height: 38),
                 alignment: .left
             )
+            // 中文单位改为右对齐，紧贴卡片右侧但保留 16px 边距，避免视觉上溢出。
             drawText(
-                "实际入睡 \(asleepMinutes / 60)h\(asleepMinutes % 60)m",
-                font: .systemFont(ofSize: 13, weight: .medium),
+                row.2,
+                font: .systemFont(ofSize: 12, weight: .medium),
                 color: Palette.secondaryText,
-                rect: CGRect(x: Layout.outerMargin, y: 516, width: 178, height: 18),
-                alignment: .left
-            )
-        } else {
-            drawDailyStatBlock(
-                title: "昨晚睡眠",
-                value: "—",
-                unit: "",
-                origin: CGPoint(x: Layout.outerMargin, y: 432),
-                in: context,
-                valueFontSize: 28
-            )
-            drawText(
-                "暂未读到睡眠记录",
-                font: .systemFont(ofSize: 13, weight: .medium),
-                color: Palette.secondaryText,
-                rect: CGRect(x: Layout.outerMargin, y: 498, width: 178, height: 18),
-                alignment: .left
+                rect: CGRect(x: metricsX + 108, y: y + 14, width: Layout.canvasSize.width - Layout.outerMargin - metricsX - 108, height: 18),
+                alignment: .right
             )
         }
 
-        drawDailyStatBlock(
-            title: "正念分钟",
-            value: snapshot.mindfulMinutes > 0 ? "\(Int(snapshot.mindfulMinutes.rounded()))" : "—",
-            unit: snapshot.mindfulMinutes > 0 ? "分钟" : "",
-            origin: CGPoint(x: 220, y: 432),
-            in: context,
-            valueFontSize: 28
-        )
-        let workoutMinutes = Int(snapshot.fitness.workoutDuration / 60)
+        // 步数（贴在三环正下方做个 chip）
         drawText(
-            "训练 \(snapshot.fitness.workoutCount) 次 · \(workoutMinutes) 分钟",
-            font: .systemFont(ofSize: 13, weight: .medium),
+            String(format: "步数 %d · %.2f km", snapshot.fitness.stepCount, snapshot.fitness.distanceMeters / 1000.0),
+            font: .systemFont(ofSize: 12, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: 220, y: 498, width: 164, height: 18),
+            rect: CGRect(x: 28, y: 384, width: 160, height: 18),
+            alignment: .center
+        )
+
+        drawDivider(y: 416, in: context)
+
+        // ── 底部：昨晚睡眠（一行最关键的信息）─────────────────────
+        drawText(
+            "昨晚睡眠",
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: Palette.secondaryText,
+            rect: CGRect(x: Layout.outerMargin, y: 428, width: 200, height: 18),
             alignment: .left
         )
 
-        drawFootnote(
-            "数据来自健康 App",
-            y: 560,
-            in: context
-        )
+        if let sleep = snapshot.sleep {
+            let totalMinutes = Int(sleep.inBedDuration / 60)
+            let h = totalMinutes / 60
+            let m = totalMinutes % 60
+            drawText(
+                "\(h)",
+                font: .systemFont(ofSize: 56, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: Layout.outerMargin, y: 452, width: 70, height: 64),
+                alignment: .left
+            )
+            drawText(
+                "h",
+                font: .systemFont(ofSize: 18, weight: .semibold),
+                color: Palette.accentSleep,
+                rect: CGRect(x: Layout.outerMargin + 56, y: 482, width: 20, height: 24),
+                alignment: .left
+            )
+            drawText(
+                "\(m)",
+                font: .systemFont(ofSize: 32, weight: .bold),
+                color: Palette.outline,
+                rect: CGRect(x: Layout.outerMargin + 80, y: 466, width: 48, height: 40),
+                alignment: .left
+            )
+            drawText(
+                "min",
+                font: .systemFont(ofSize: 14, weight: .semibold),
+                color: Palette.accentSleep,
+                rect: CGRect(x: Layout.outerMargin + 80, y: 502, width: 32, height: 18),
+                alignment: .left
+            )
+
+            // 右半边：心率 + 呼吸 + 血氧 紧凑展示（一日总结里的睡眠生理摘要）
+            let sleepInfoX: CGFloat = 198
+            let avgHRLabel = sleep.averageHeartRate.map { "\(Int($0.rounded())) bpm" } ?? "—"
+            let respLabel = sleep.respiratoryRate.map { String(format: "%.1f 次/分", $0) } ?? "—"
+            let spo2Label = sleep.bloodOxygenAverage.map { String(format: "%.1f%%", $0) } ?? "—"
+            let infoRows: [(String, String)] = [
+                ("平均心率", avgHRLabel),
+                ("呼吸频率", respLabel),
+                ("血氧", spo2Label)
+            ]
+            for (index, row) in infoRows.enumerated() {
+                let y = 452 + CGFloat(index) * 26
+                drawText(
+                    row.0,
+                    font: .systemFont(ofSize: 12, weight: .medium),
+                    color: Palette.secondaryText,
+                    rect: CGRect(x: sleepInfoX, y: y, width: 90, height: 18),
+                    alignment: .left
+                )
+                drawText(
+                    row.1,
+                    font: .monospacedDigitSystemFont(ofSize: 14, weight: .semibold),
+                    color: Palette.outline,
+                    rect: CGRect(x: sleepInfoX + 90, y: y, width: 110, height: 18),
+                    alignment: .right
+                )
+            }
+        } else {
+            drawText(
+                "暂未读到睡眠记录",
+                font: .systemFont(ofSize: 14, weight: .medium),
+                color: Palette.secondaryText,
+                rect: CGRect(x: Layout.outerMargin, y: 462, width: 360, height: 22),
+                alignment: .left
+            )
+        }
     }
 
     // MARK: - 通用绘制
 
     private static func drawHeader(title: String, accent: UIColor, updatedAt: Date, in context: CGContext) {
-        // 顶部色条
-        accent.setFill()
-        context.fill(CGRect(x: 0, y: 0, width: Layout.canvasSize.width, height: 6))
-
+        // 不画顶部色条，也不画 accent 强调线——避免在墨水屏抖动后出现锯齿。
+        _ = accent
         // 主标题
         drawText(
             title,
-            font: .systemFont(ofSize: 36, weight: .bold),
+            font: .systemFont(ofSize: 34, weight: .bold),
             color: Palette.outline,
-            rect: CGRect(x: Layout.outerMargin, y: 28, width: 260, height: 50),
+            rect: CGRect(x: Layout.outerMargin, y: 18, width: 240, height: 48),
             alignment: .left
         )
 
         // 副标题
         drawText(
             "Tatoo 健康看板",
-            font: .systemFont(ofSize: 14, weight: .medium),
+            font: .systemFont(ofSize: 13, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: Layout.outerMargin, y: 78, width: 260, height: 18),
+            rect: CGRect(x: Layout.outerMargin, y: 68, width: 240, height: 18),
             alignment: .left
         )
 
@@ -517,22 +656,22 @@ enum HealthSkillRenderer {
         timeFormatter.dateFormat = "HH:mm"
         drawText(
             dateFormatter.string(from: updatedAt),
-            font: .systemFont(ofSize: 18, weight: .semibold),
+            font: .systemFont(ofSize: 17, weight: .semibold),
             color: Palette.outline,
-            rect: CGRect(x: 240, y: 32, width: 144, height: 24),
+            rect: CGRect(x: 240, y: 22, width: 144, height: 24),
             alignment: .right
         )
         drawText(
             "更新 " + timeFormatter.string(from: updatedAt),
-            font: .systemFont(ofSize: 13, weight: .medium),
+            font: .systemFont(ofSize: 12, weight: .medium),
             color: Palette.secondaryText,
-            rect: CGRect(x: 240, y: 60, width: 144, height: 18),
+            rect: CGRect(x: 240, y: 50, width: 144, height: 18),
             alignment: .right
         )
         // 头部底分隔线
         drawLine(
-            from: CGPoint(x: Layout.outerMargin, y: 110),
-            to: CGPoint(x: Layout.canvasSize.width - Layout.outerMargin, y: 110),
+            from: CGPoint(x: Layout.outerMargin, y: 96),
+            to: CGPoint(x: Layout.canvasSize.width - Layout.outerMargin, y: 96),
             color: Palette.divider,
             width: 1,
             in: context

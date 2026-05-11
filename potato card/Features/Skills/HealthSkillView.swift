@@ -116,12 +116,7 @@ struct HealthSkillSectionView: View {
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
         .frame(height: 160)
-        .task {
-            // 仅在用户开启过技能并且尚未请求过授权时弹一次系统权限框，避免一进入技能页就被打断。
-            if healthStore.config.isEnabled {
-                await healthStore.onAppear()
-            }
-        }
+        // 进入“技能”页时不主动请求 HealthKit 授权——只在用户主动打开开关或进入详情页时请求。
     }
 
     private var metaText: String {
@@ -229,6 +224,9 @@ struct HealthSkillDetailView: View {
     @State private var isSyncing = false
     @State private var statusMessage: String?
     @State private var hasAttemptedAuthorization = false
+    // 调试用：当 HealthKit 读不到数据时（模拟器、首次安装），切到示例数据预览，
+    // 便于检查 400x600 渲染布局是否合理。打包发版不需要隐藏，本身是个无害的展示开关。
+    @State private var showsSampleData = false
 
     var body: some View {
         ScrollView(.vertical) {
@@ -262,34 +260,47 @@ struct HealthSkillDetailView: View {
 
     private var previewCard: some View {
         VStack(spacing: 8) {
-            if let snapshot = store.snapshot {
-                Image(uiImage: HealthSkillRenderer.renderDisplayImage(snapshot: snapshot, targetSize: CGSize(width: 400, height: 600)))
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-                    .frame(maxWidth: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                    )
-            } else {
-                Image(uiImage: HealthSkillRenderer.renderPlaceholder(mode: store.config.defaultMode))
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-                    .frame(maxWidth: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                    )
+            Image(uiImage: previewImage)
+                .resizable()
+                .interpolation(.none)
+                .scaledToFit()
+                .frame(maxWidth: 280)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+            HStack(spacing: 10) {
+                Text("400 x 600 墨水屏预览")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Button {
+                    showsSampleData.toggle()
+                } label: {
+                    Text(showsSampleData ? "示例数据 开" : "示例数据 关")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(showsSampleData ? Color.accentColor : Color.gray, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
-            Text("400 x 600 墨水屏预览")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var previewImage: UIImage {
+        if showsSampleData {
+            return HealthSkillRenderer.renderDisplayImage(
+                snapshot: HealthSkillMockData.snapshot(for: store.config.defaultMode),
+                targetSize: CGSize(width: 400, height: 600)
+            )
+        }
+        if let snapshot = store.snapshot {
+            return HealthSkillRenderer.renderDisplayImage(snapshot: snapshot, targetSize: CGSize(width: 400, height: 600))
+        }
+        return HealthSkillRenderer.renderPlaceholder(mode: store.config.defaultMode)
     }
 
     private var modeSelector: some View {
