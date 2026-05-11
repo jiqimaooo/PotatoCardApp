@@ -539,8 +539,14 @@ struct SkillsHomeView: View {
     }
 
     private var isWeatherSyncing: Bool {
-        bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
+        // 仅当「天气模块」是当前同步发起方时才把按钮置为进度状态。
+        // currentSyncSource 在 startWeatherSync 时打上 "weather"，
+        // 在 .succeeded/.failed 时（handleTransferPhaseChange）清掉。
+        bleService.currentSyncSource == SkillsHomeView.weatherSyncSource &&
+        (bleService.transferPhase == .preparing || bleService.transferPhase == .transferring)
     }
+
+    static let weatherSyncSource = "weather"
 
     private var canStartWeatherSync: Bool {
         weatherStore.snapshot != nil && (selectedTargetDevice ?? activeDevice) != nil
@@ -589,6 +595,8 @@ struct SkillsHomeView: View {
                 guard let context = makeSyncContext() else { return }
                 activeSyncContext = context
                 didHandleActiveSyncSuccess = false
+                // 打标，使得 isWeatherSyncing 只在天气模块发起的传输上为真。
+                bleService.beginSync(source: SkillsHomeView.weatherSyncSource)
                 // 前台“立即同步”也要显式透传天气模块自己的算法，不能回落到全局算法。
                 bleService.transfer(
                     image: context.transferImage,
@@ -609,9 +617,11 @@ struct SkillsHomeView: View {
             didHandleActiveSyncSuccess = true
             bleService.markLastTransferredImage(context.displayImage)
             weatherStore.markSynced()
+            bleService.endSync(source: SkillsHomeView.weatherSyncSource)
             activeSyncContext = nil
         case .failed:
             didHandleActiveSyncSuccess = false
+            bleService.endSync(source: SkillsHomeView.weatherSyncSource)
             activeSyncContext = nil
         default:
             break
@@ -1260,28 +1270,61 @@ private struct WeatherCitySelectionView: View {
 
 private struct WeatherFrequencyPickerView: View {
     @ObservedObject var store: WeatherSkillStore
+    // 本地选中态：点击后立刻更新 UI 高亮，不依赖 @Published config 走完一圈。
+    // 真正写入 store 在 Task 里异步做，避免 SwiftUI 在同一 runloop tick 内
+    // 把 home / detail / picker 三处 view 都重建 → 用户感觉「点了没反应」。
+    @State private var pendingSelection: WeatherUpdateFrequency?
+
+    private var currentSelection: WeatherUpdateFrequency {
+        pendingSelection ?? store.config.updateFrequency
+    }
 
     var body: some View {
-        List {
-            ForEach(WeatherUpdateFrequency.allCases) { frequency in
-                Button {
-                    store.updateFrequency(frequency)
-                } label: {
-                    HStack {
-                        Text(frequency.title)
-                        Spacer()
-                        if store.config.updateFrequency == frequency {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 0) {
+                ForEach(Array(WeatherUpdateFrequency.allCases.enumerated()), id: \.element) { index, frequency in
+                    Button {
+                        guard pendingSelection != frequency else { return }
+                        pendingSelection = frequency
+                        // 把 store 改动推到下一个 runloop，让 button 高亮先落地。
+                        Task { @MainActor in
+                            store.updateFrequency(frequency)
                         }
+                    } label: {
+                        HStack {
+                            Text(frequency.title)
+                                .font(.system(size: 16, weight: .medium))
+                            Spacer()
+                            if currentSelection == frequency {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 16)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+
+                    if index < WeatherUpdateFrequency.allCases.count - 1 {
+                        Divider()
+                            .padding(.leading, 18)
                     }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.primary)
             }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("更新频率")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: store.config.updateFrequency) { newValue in
+            // 实际写完之后把本地 pending 清掉，避免和外部源不一致。
+            if pendingSelection == newValue { pendingSelection = nil }
+        }
     }
 }
 

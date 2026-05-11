@@ -54,6 +54,11 @@ final class HealthDataService: @unchecked Sendable {
             }
             insertQuantity(into: &types, identifier: .stepCount)
             insertQuantity(into: &types, identifier: .distanceWalkingRunning)
+            // 健身看板下半部分会展示心率/呼吸/血氧等身体指标，这些也按今日时间窗读。
+            insertQuantity(into: &types, identifier: .heartRate)
+            insertQuantity(into: &types, identifier: .restingHeartRate)
+            insertQuantity(into: &types, identifier: .respiratoryRate)
+            insertQuantity(into: &types, identifier: .oxygenSaturation)
             types.insert(HKObjectType.workoutType())
             if #available(iOS 16.0, *) {
                 types.insert(HKObjectType.activitySummaryType())
@@ -103,83 +108,121 @@ final class HealthDataService: @unchecked Sendable {
 
     // MARK: - 睡眠
 
-    // 取“最近一晚”：从昨日 18:00 到今日 18:00 的睡眠分析样本。
-    // HealthKit 的 sleepAnalysis 包含床上/各睡眠阶段；用 endDate 最大的样本块作为“起床时间”。
-    func fetchSleepSnapshot() async throws -> HealthSleepSnapshot {
-        guard let store = healthStore else { throw HealthSkillError.healthDataUnavailable }
+    // 「睡眠日」按起床事件归属。切分点 = 用户日常起床时间 − 3 小时，可配置。
+    // 比如默认起床 07:00 → 切分点 04:00；用户改成 10:00 起床 → 切分点 07:00。
+    //
+    // 分桶规则改用 session.startDate（一晚的开始时刻）：
+    // 跨切分点的睡眠会自然落到「开始那天」的桶里，等价于产品需求里说的
+    // 「如果某个睡眠包含了分割点，算作前一天」。
+    //
+    // sleepDayLowerBound(daysAgo: N) 返回 bucket[N] 的下边界（不含），是 splitHour 锚点；
+    // bucket[N] 的上边界（含）：daysAgo=0 时是 now，否则是更近一天的同锚点。
+    private func mostRecentSplitBefore(now: Date, splitHour: Int) -> Date {
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: now)
+        let anchorToday = cal.date(byAdding: .hour, value: splitHour, to: startOfToday) ?? startOfToday
+        if now >= anchorToday {
+            return anchorToday
+        }
+        return cal.date(byAdding: .day, value: -1, to: anchorToday) ?? anchorToday
+    }
+
+    func sleepDayLowerBound(daysAgo: Int, now: Date = Date(), splitHour: Int = 4) -> Date {
+        let cal = Calendar.current
+        let anchor = mostRecentSplitBefore(now: now, splitHour: splitHour)
+        return cal.date(byAdding: .day, value: -daysAgo, to: anchor) ?? anchor
+    }
+
+    func sleepDayUpperBound(daysAgo: Int, now: Date = Date(), splitHour: Int = 4) -> Date {
+        guard daysAgo > 0 else { return now }
+        return sleepDayLowerBound(daysAgo: daysAgo - 1, now: now, splitHour: splitHour)
+    }
+
+    func fetchSleepSnapshot(dailyWakeHour: Int = 7) async throws -> HealthSleepSnapshot {
+        // 切分点 = 起床时间 − 3 小时，并 clamp 到 [0, 23]。
+        let splitHour = max(0, min(23, dailyWakeHour - 3))
+        return try await fetchSleepSnapshotImpl(splitHour: splitHour)
+    }
+
+    private func fetchSleepSnapshotImpl(splitHour: Int) async throws -> HealthSleepSnapshot {
+        guard let store = healthStore else {
+            throw HealthSkillError.healthDataUnavailable
+        }
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
             throw HealthSkillError.noData(.sleep)
         }
 
-        let calendar = Calendar.current
         let now = Date()
-        // 起止区间宽一点，覆盖晚归和早起的极端情况。
-        let startOfToday = calendar.startOfDay(for: now)
-        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
-        let queryStart = calendar.date(byAdding: .hour, value: 12, to: startOfYesterday) ?? startOfYesterday
+        // 一次性把过去 7 个「睡眠日」拉下来。窗口起点再往前留 8 小时兜底，
+        // 终点就是 now（包含「正在结束的当晚」起床事件）。
+        let queryStart = Calendar.current.date(
+            byAdding: .hour,
+            value: -8,
+            to: sleepDayLowerBound(daysAgo: 6, now: now, splitHour: splitHour)
+        ) ?? now
         let queryEnd = now
 
-        let predicate = HKQuery.predicateForSamples(withStart: queryStart, end: queryEnd, options: .strictStartDate)
+        let predicate = HKQuery.predicateForSamples(withStart: queryStart, end: queryEnd, options: .strictEndDate)
 
         let samples = try await querySamples(store: store, type: type, predicate: predicate)
         guard !samples.isEmpty else { throw HealthSkillError.noData(.sleep) }
 
-        // 取 endDate 最晚的样本所属的“连续睡眠会话”：以最后一个样本为锚点向前回溯，
-        // 中间间隔超过 45 分钟视为离开睡眠。
-        let sorted = samples.sorted { $0.endDate < $1.endDate }
-        guard let lastSample = sorted.last else { throw HealthSkillError.noData(.sleep) }
-
-        var session: [HKCategorySample] = [lastSample]
-        var pointer = lastSample.startDate
-        for sample in sorted.reversed().dropFirst() {
-            if pointer.timeIntervalSince(sample.endDate) <= 45 * 60 {
-                session.append(sample)
-                pointer = min(pointer, sample.startDate)
-            } else {
-                break
+        // 先把所有 sample 按时间正序分割成「睡眠会话」：相邻样本间隔 ≤ 45 分钟视作同一晚。
+        // HealthKit 一晚会产出几十个子样本（深睡/REM/核心/清醒…），不能按单 sample 分桶。
+        let sortedByStart = samples.sorted { $0.startDate < $1.startDate }
+        var sessions: [[HKCategorySample]] = []
+        var currentSession: [HKCategorySample] = []
+        var sessionMaxEnd: Date?
+        for sample in sortedByStart {
+            if let lastEnd = sessionMaxEnd, sample.startDate.timeIntervalSince(lastEnd) > 45 * 60 {
+                sessions.append(currentSession)
+                currentSession = []
+                sessionMaxEnd = nil
             }
+            currentSession.append(sample)
+            sessionMaxEnd = max(sessionMaxEnd ?? sample.endDate, sample.endDate)
         }
-        session.reverse()
+        if !currentSession.isEmpty {
+            sessions.append(currentSession)
+        }
 
-        var inBed: TimeInterval = 0
-        var asleep: TimeInterval = 0
-        var deep: TimeInterval = 0
-        var rem: TimeInterval = 0
-        var core: TimeInterval = 0
-        var awake: TimeInterval = 0
-
-        for sample in session {
-            let duration = sample.endDate.timeIntervalSince(sample.startDate)
-            // 不同 iOS 版本枚举值的命名变化用 rawValue 处理。
-            switch HKCategoryValueSleepAnalysis(rawValue: sample.value) {
-            case .inBed:
-                inBed += duration
-            case .asleepDeep:
-                deep += duration
-                asleep += duration
-            case .asleepREM:
-                rem += duration
-                asleep += duration
-            case .asleepCore:
-                core += duration
-                asleep += duration
-            case .asleepUnspecified:
-                asleep += duration
-            case .awake:
-                awake += duration
-            default:
+        // 按 session.startDate 分桶（不是 endDate）。这样跨切分点的睡眠自然落到「开始那天」的桶里，
+        // 等价于：「如果某个睡眠包含了分割点，算作前一天」。
+        var buckets: [Int: [HKCategorySample]] = [:]
+        let lowerBounds: [Date] = (0...7).map { sleepDayLowerBound(daysAgo: $0, now: now, splitHour: splitHour) }
+        let upperBounds: [Date] = (0..<7).map { sleepDayUpperBound(daysAgo: $0, now: now, splitHour: splitHour) }
+        for session in sessions {
+            guard let startMin = session.map(\.startDate).min() else { continue }
+            for n in 0..<7 where startMin > lowerBounds[n + 1] && startMin <= upperBounds[n] {
+                // 多段 session 落到同一桶时（午睡 + 夜睡）合并，让总时长更接近真实。
+                buckets[n, default: []].append(contentsOf: session)
                 break
             }
         }
 
-        guard let sessionStart = session.first?.startDate,
-              let sessionEnd = session.last?.endDate else {
+        // 计算每一晚的 effective 在床时长，组装成「recentAsleepDurations（最早→最新）」。
+        // 这里改用 effectiveInBed（与顶部「总在床时长」同口径），而不是只算阶段化 asleep —
+        // 否则缺少阶段标记的设备会让每晚平均只剩 3~5 小时，与用户实际体感不符。
+        // 注意：只包含「实际有数据的夜晚」，没数据的夜晚是 0，渲染层 averageAsleepLabel
+        // 会过滤 0 后再求平均（= 过去 7/3 天里"有数据的 y 天" 取平均）。
+        var recentAsleepSeven: [TimeInterval] = []
+        for n in stride(from: 6, through: 0, by: -1) {
+            let stats = sessionStatistics(for: buckets[n] ?? [])
+            recentAsleepSeven.append(stats.effectiveInBed)
+        }
+
+        // 最近一晚（daysAgo=0）拿来当作 snapshot 主体。
+        let latestSamples = buckets[0] ?? []
+        guard !latestSamples.isEmpty else {
+            throw HealthSkillError.noData(.sleep)
+        }
+        let latest = sessionStatistics(for: latestSamples)
+        guard let sessionStart = latest.start, let sessionEnd = latest.end else {
             throw HealthSkillError.noData(.sleep)
         }
 
-        // inBed 为 0 时回退到 session 实际跨度，保证 UI 总时长一定有数。
-        let fallbackInBed = sessionEnd.timeIntervalSince(sessionStart)
-        let effectiveInBed = inBed > 0 ? inBed : fallbackInBed
+        // 顶部「总在床时长」与 recentAsleepDurations 同口径：effective in-bed。
+        let effectiveInBed = latest.effectiveInBed
 
         // 睡眠期间生理指标：复用同一时间窗，缺数据时返回 nil（看板里会显示 "—"）。
         let vitalsPredicate = HKQuery.predicateForSamples(withStart: sessionStart, end: sessionEnd, options: .strictStartDate)
@@ -199,18 +242,90 @@ final class HealthDataService: @unchecked Sendable {
             bedtime: sessionStart,
             wakeTime: sessionEnd,
             inBedDuration: effectiveInBed,
-            asleepDuration: asleep,
-            deepDuration: deep,
-            remDuration: rem,
-            coreDuration: core,
-            awakeDuration: awake,
+            asleepDuration: latest.asleep,
+            deepDuration: latest.deep,
+            remDuration: latest.rem,
+            coreDuration: latest.core,
+            awakeDuration: latest.awake,
             averageHeartRate: avgHRValue,
             minHeartRate: minHRValue,
             respiratoryRate: respValue,
             // HealthKit 的 oxygenSaturation 单位是百分比（0~1），转成 0~100 方便渲染层处理。
             bloodOxygenAverage: spo2Value.map { $0 * 100 },
-            heartRateVariability: hrvValue
+            heartRateVariability: hrvValue,
+            recentAsleepDurations: recentAsleepSeven
         )
+    }
+
+    // 把一晚的 HKCategorySample 数组折叠成阶段时长 + 起止时间。
+    private struct SleepSessionStats {
+        var inBed: TimeInterval = 0
+        var asleep: TimeInterval = 0
+        var deep: TimeInterval = 0
+        var rem: TimeInterval = 0
+        var core: TimeInterval = 0
+        var awake: TimeInterval = 0
+        var start: Date?
+        var end: Date?
+
+        // 顶部「总在床时长」的口径：直接用 session 整段跨度（first start → last end），
+        // 不再读 .inBed 字段。原因：Apple Watch 的 .inBed 只在检测到长时间静止时记录，
+        // 经常只覆盖真实在床时间的一部分；用 max(inBed, span) 也不准，因为 span 才是
+        // 「从上床到起床」的真实时长，与用户体感一致。无 sample 时退到 .asleep 防 0。
+        var effectiveInBed: TimeInterval {
+            if let start, let end {
+                let span = end.timeIntervalSince(start)
+                if span > 0 { return span }
+            }
+            if inBed > 0 { return inBed }
+            return asleep
+        }
+    }
+
+    private func sessionStatistics(for samples: [HKCategorySample]) -> SleepSessionStats {
+        guard !samples.isEmpty else { return SleepSessionStats() }
+        let sorted = samples.sorted { $0.startDate < $1.startDate }
+
+        // 选「最后一个 endDate 所属的连续会话」：从最后一个样本往前回溯，相邻间隔 ≤ 45 分钟视为同一晚。
+        guard let last = sorted.last else { return SleepSessionStats() }
+        var session: [HKCategorySample] = [last]
+        var pointer = last.startDate
+        for sample in sorted.reversed().dropFirst() {
+            if pointer.timeIntervalSince(sample.endDate) <= 45 * 60 {
+                session.append(sample)
+                pointer = min(pointer, sample.startDate)
+            } else {
+                break
+            }
+        }
+        session.reverse()
+
+        var stats = SleepSessionStats()
+        for sample in session {
+            let duration = sample.endDate.timeIntervalSince(sample.startDate)
+            switch HKCategoryValueSleepAnalysis(rawValue: sample.value) {
+            case .inBed:
+                stats.inBed += duration
+            case .asleepDeep:
+                stats.deep += duration
+                stats.asleep += duration
+            case .asleepREM:
+                stats.rem += duration
+                stats.asleep += duration
+            case .asleepCore:
+                stats.core += duration
+                stats.asleep += duration
+            case .asleepUnspecified:
+                stats.asleep += duration
+            case .awake:
+                stats.awake += duration
+            default:
+                break
+            }
+        }
+        stats.start = session.first?.startDate
+        stats.end = session.last?.endDate
+        return stats
     }
 
     // MARK: - 健身
@@ -234,6 +349,13 @@ final class HealthDataService: @unchecked Sendable {
         async let workouts = fetchWorkouts(store: store, predicate: predicate)
         async let summary = fetchActivitySummary(store: store)
 
+        // 今日身体指标：静息心率取最新一次记录（不限今天），其余三个按今日时间窗的平均。
+        let bpmUnit = HKUnit(from: "count/min")
+        async let restingHRValue = latestSampleValue(store: store, identifier: .restingHeartRate, unit: bpmUnit)
+        async let avgHRValue = averageQuantity(store: store, identifier: .heartRate, unit: bpmUnit, predicate: predicate)
+        async let respiratoryValue = averageQuantity(store: store, identifier: .respiratoryRate, unit: bpmUnit, predicate: predicate)
+        async let spo2Value = averageQuantity(store: store, identifier: .oxygenSaturation, unit: HKUnit.percent(), predicate: predicate)
+
         let energyValue = await activeEnergy
         let exerciseValue = await exerciseMinutes
         let standCategoryHours = await standHoursFromCategory
@@ -242,6 +364,10 @@ final class HealthDataService: @unchecked Sendable {
         let distanceValue = await distance
         let workoutList = await workouts
         let summaryValue = await summary
+        let restingHR = await restingHRValue
+        let avgHR = await avgHRValue
+        let resp = await respiratoryValue
+        let spo2 = await spo2Value
 
         let workoutDuration = workoutList.reduce(0.0) { $0 + $1.duration }
         // 取“分类小时计数”和“分钟换算小时”里较大的那个，避免 appleStandHour 在部分设备未被记录时漏算。
@@ -261,20 +387,25 @@ final class HealthDataService: @unchecked Sendable {
             stepCount: Int(stepsValue.rounded()),
             distanceMeters: distanceValue,
             workoutCount: workoutList.count,
-            workoutDuration: workoutDuration
+            workoutDuration: workoutDuration,
+            restingHeartRate: restingHR,
+            averageHeartRate: avgHR,
+            respiratoryRate: resp,
+            // HealthKit 的 oxygenSaturation 单位是百分比（0~1），转成 0~100 与睡眠看板保持一致。
+            bloodOxygenAverage: spo2.map { $0 * 100 }
         )
     }
 
     // MARK: - 一日总结
 
-    func fetchDailySnapshot() async throws -> HealthDailySnapshot {
+    func fetchDailySnapshot(dailyWakeHour: Int = 7) async throws -> HealthDailySnapshot {
         guard let store = healthStore else { throw HealthSkillError.healthDataUnavailable }
 
         // fitness 是一日总结的主表，没有它直接抛 noData。
         let fitness = try await fetchFitnessSnapshot()
 
         // 睡眠数据可能缺失（比如午休还没记录），用 try? 容错。
-        let sleep = try? await fetchSleepSnapshot()
+        let sleep = try? await fetchSleepSnapshot(dailyWakeHour: dailyWakeHour)
 
         let calendar = Calendar.current
         let now = Date()

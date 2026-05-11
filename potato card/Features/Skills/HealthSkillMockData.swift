@@ -29,7 +29,16 @@ enum HealthSkillMockData {
             minHeartRate: 52,
             respiratoryRate: 14.6,
             bloodOxygenAverage: 97.4,
-            heartRateVariability: 48
+            heartRateVariability: 48,
+            recentAsleepDurations: [
+                7.0 * 3600,
+                6.5 * 3600,
+                7.5 * 3600,
+                8.0 * 3600,
+                7.2 * 3600,
+                6.8 * 3600,
+                7 * 3600 + 20 * 60
+            ]
         )
     }()
 
@@ -44,7 +53,11 @@ enum HealthSkillMockData {
         stepCount: 7423,
         distanceMeters: 5482,
         workoutCount: 1,
-        workoutDuration: 32 * 60
+        workoutDuration: 32 * 60,
+        restingHeartRate: 56,
+        averageHeartRate: 78,
+        respiratoryRate: 15.8,
+        bloodOxygenAverage: 97.2
     )
 
     static let daily = HealthDailySnapshot(

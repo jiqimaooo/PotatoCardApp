@@ -21,6 +21,9 @@ final class WeatherSkillStore: ObservableObject {
     private let userDefaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    // 专门负责配置持久化的串行后台队列。避免 JSON encode + UserDefaults 写入占用主线程，
+    // 让 picker 等设置类 UI 点击后能立即返回。
+    private static let persistQueue = DispatchQueue(label: "weather.skill.store.persist", qos: .utility)
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -243,8 +246,13 @@ final class WeatherSkillStore: ObservableObject {
     }
 
     private func persistConfiguration() {
-        guard let data = try? encoder.encode(config) else { return }
-        userDefaults.set(data, forKey: Constants.configurationKey)
+        // 依赖 WeatherSkillConfiguration : Codable + Sendable-by-value。拍一份快照后
+        // 扔到后台队列同步处理 encode + UserDefaults，主线程不被阻塞。
+        let snapshot = config
+        Self.persistQueue.async { [encoder, userDefaults] in
+            guard let data = try? encoder.encode(snapshot) else { return }
+            userDefaults.set(data, forKey: Constants.configurationKey)
+        }
     }
 
     private static func loadConfiguration(decoder: JSONDecoder, userDefaults: UserDefaults) -> WeatherSkillConfiguration {

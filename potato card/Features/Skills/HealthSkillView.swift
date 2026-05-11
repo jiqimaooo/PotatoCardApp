@@ -152,6 +152,9 @@ struct HealthSkillSectionView: View {
     private func startSync() async {
         isSyncing = true
         lastSyncMessage = "同步中…"
+        // 打标，使「天气卡片」的进度按钮不会跟着走动画。
+        bleService.beginSync(source: HealthSkillSectionView.syncSource)
+        defer { bleService.endSync(source: HealthSkillSectionView.syncSource) }
         do {
             let message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
                 mode: healthStore.config.defaultMode,
@@ -167,6 +170,8 @@ struct HealthSkillSectionView: View {
         }
         isSyncing = false
     }
+
+    static let syncSource = "health"
 
     private var accentColor: Color { Color(red: 0.18, green: 0.49, blue: 0.98) }
     private var primaryTextColor: Color { colorScheme == .dark ? Color.white.opacity(0.94) : Color.black.opacity(0.92) }
@@ -232,9 +237,8 @@ struct HealthSkillDetailView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 previewCard
-                modeSelector
+                detailSection
                 authorizationCard
-                deviceCard
                 syncButton
                 if let statusMessage {
                     Text(statusMessage)
@@ -324,30 +328,123 @@ struct HealthSkillDetailView: View {
         }
     }
 
-    private var modeSelector: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("默认看板模式")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.primary)
-            Picker("默认看板模式", selection: Binding(
-                get: { store.config.defaultMode },
-                set: { newValue in
-                    store.updateDefaultMode(newValue)
-                    Task { await store.refresh(mode: newValue) }
-                }
-            )) {
-                ForEach(HealthDashboardMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
+    // MARK: - 设置区（grouped rows，与天气看板保持一致）
 
-            Text(store.config.defaultMode.summary)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+    private var detailSection: some View {
+        VStack(spacing: 0) {
+            detailToggleRow(title: "技能开关", isOn: Binding(
+                get: { store.config.isEnabled },
+                set: { store.updateEnabled($0) }
+            ))
+            dividerRow
+            detailNavigationRow(title: "默认看板", value: store.config.defaultMode.title) {
+                HealthModePickerView(store: store)
+            }
+            dividerRow
+            detailNavigationRow(title: "日常起床时间", value: wakeHourLabel) {
+                HealthWakeHourPickerView(store: store)
+            }
+            dividerRow
+            detailNavigationRow(title: "同步到设备", value: selectedDeviceLabel) {
+                HealthDevicePickerView(store: store)
+                    .environmentObject(bleService)
+            }
         }
-        .padding(14)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+    }
+
+    private func detailNavigationRow<Destination: View>(
+        title: String,
+        value: String,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink(destination: destination()) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(primaryTextColor)
+
+                Spacer()
+
+                Text(value)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 56)
+        }
+    }
+
+    private func detailToggleRow(title: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(primaryTextColor)
+
+            Spacer()
+
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(Color(red: 0.18, green: 0.49, blue: 0.98))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+    }
+
+    private var dividerRow: some View {
+        Divider()
+            .padding(.leading, 16)
+    }
+
+    private var selectedDevice: BleDevice? {
+        let targetID = store.config.targetDeviceID.trimmed
+        guard !targetID.isEmpty else { return nil }
+        if let device = bleService.devices.first(where: { $0.id == targetID }) {
+            return device
+        }
+        if let connected = bleService.connectedDevice, connected.id == targetID {
+            return connected
+        }
+        if let selected = bleService.selectedDevice, selected.id == targetID {
+            return selected
+        }
+        return nil
+    }
+
+    private var selectedDeviceLabel: String {
+        if let selectedDevice {
+            return selectedDevice.name
+        }
+        if let snapshot = store.config.targetDeviceSnapshot, !snapshot.id.trimmed.isEmpty {
+            return snapshot.name
+        }
+        return "未选择"
+    }
+
+    private var wakeHourLabel: String {
+        let h = store.config.dailyWakeHour
+        return String(format: "%02d:00", h)
+    }
+
+    private var primaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.94) : Color.black.opacity(0.92)
+    }
+
+    private var secondaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.66) : Color.black.opacity(0.56)
+    }
+
+    private var cardFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.94)
+    }
+
+    private var cardStrokeColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
     }
 
     private var authorizationCard: some View {
@@ -382,46 +479,6 @@ struct HealthSkillDetailView: View {
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var deviceCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(.tint)
-                Text("同步设备")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-            }
-            if let snapshot = store.config.targetDeviceSnapshot {
-                Text("\(snapshot.name) · \(snapshot.pixelWidth) x \(snapshot.pixelHeight)")
-                    .font(.system(size: 13, weight: .medium))
-            } else if let device = bleService.connectedDevice ?? bleService.selectedDevice {
-                Text("将自动使用：\(device.name)")
-                    .font(.system(size: 13, weight: .medium))
-            } else {
-                Text("尚未绑定。健康看板会自动复用天气技能里的同步设备，也可以在“设备”页连接一台土豆片。")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            if let device = bleService.connectedDevice ?? bleService.selectedDevice,
-               store.config.targetDeviceID.trimmed.isEmpty || store.config.targetDeviceID != device.id {
-                Button {
-                    store.updateTargetDevice(device)
-                } label: {
-                    Text("绑定到当前设备")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 14)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(14)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     private var syncButton: some View {
         Button {
             Task { await runSync() }
@@ -440,6 +497,8 @@ struct HealthSkillDetailView: View {
     private func runSync() async {
         isSyncing = true
         statusMessage = "同步中…"
+        bleService.beginSync(source: HealthSkillSectionView.syncSource)
+        defer { bleService.endSync(source: HealthSkillSectionView.syncSource) }
         do {
             let message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
                 mode: store.config.defaultMode,
@@ -454,5 +513,183 @@ struct HealthSkillDetailView: View {
             }
         }
         isSyncing = false
+    }
+}
+
+// MARK: - 二级菜单：默认看板 / 同步设备
+// 风格与天气看板下的 WeatherFrequencyPickerView / WeatherDevicePickerView 对齐。
+
+private struct HealthModePickerView: View {
+    @ObservedObject var store: HealthSkillStore
+    // 点击瞬间先把高亮落在本地 @State，再异步推到 store，避免 SwiftUI 在 store 更新后
+    // 把列表重建吃掉点击动画（同 WeatherFrequencyPickerView）。
+    @State private var pendingSelection: HealthDashboardMode?
+
+    private var currentSelection: HealthDashboardMode {
+        pendingSelection ?? store.config.defaultMode
+    }
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 0) {
+                ForEach(Array(HealthDashboardMode.allCases.enumerated()), id: \.element) { index, mode in
+                    Button {
+                        guard pendingSelection != mode else { return }
+                        pendingSelection = mode
+                        Task { @MainActor in
+                            store.updateDefaultMode(mode)
+                            await store.refresh(mode: mode)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(mode.title)
+                                    .font(.system(size: 16, weight: .medium))
+                                Spacer()
+                                if currentSelection == mode {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                                }
+                            }
+                            Text(mode.summary)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+
+                    if index < HealthDashboardMode.allCases.count - 1 {
+                        Divider()
+                            .padding(.leading, 18)
+                    }
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("默认看板")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: store.config.defaultMode) { newValue in
+            if pendingSelection == newValue { pendingSelection = nil }
+        }
+    }
+}
+
+private struct HealthDevicePickerView: View {
+    @ObservedObject var store: HealthSkillStore
+    @EnvironmentObject private var bleService: BleTransferService
+
+    var body: some View {
+        List {
+            if let connected = bleService.connectedDevice {
+                deviceRow(connected, label: "当前连接")
+            }
+
+            ForEach(bleService.devices.filter { $0.id != bleService.connectedDevice?.id }) { device in
+                deviceRow(device, label: "可用设备")
+            }
+        }
+        .navigationTitle("同步设备")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func deviceRow(_ device: BleDevice, label: String) -> some View {
+        Button {
+            store.updateTargetDevice(device)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(device.name)
+                    Text(label)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if store.config.targetDeviceID == device.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+    }
+}
+
+// 日常起床时间 picker：0~23 小时整点；切分点 = 该时间 - 3 小时。
+private struct HealthWakeHourPickerView: View {
+    @ObservedObject var store: HealthSkillStore
+    @State private var pendingHour: Int?
+
+    private static let hours: [Int] = Array(0...23)
+
+    private var currentHour: Int {
+        pendingHour ?? store.config.dailyWakeHour
+    }
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 0) {
+                Text("用于划分睡眠日。起床时间 − 3 小时是切分点；跨切分点的睡眠会算到前一天。")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(Self.hours.enumerated()), id: \.element) { index, hour in
+                        Button {
+                            guard pendingHour != hour else { return }
+                            pendingHour = hour
+                            Task { @MainActor in
+                                store.updateDailyWakeHour(hour)
+                                await store.refresh(mode: store.config.defaultMode)
+                            }
+                        } label: {
+                            HStack {
+                                Text(String(format: "%02d:00", hour))
+                                    .font(.system(size: 16, weight: .medium).monospacedDigit())
+                                Spacer()
+                                Text("切分点 \(String(format: "%02d:00", max(0, min(23, hour - 3))))")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                if currentHour == hour {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Color(red: 0.18, green: 0.49, blue: 0.98))
+                                        .padding(.leading, 8)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 14)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.primary)
+
+                        if index < Self.hours.count - 1 {
+                            Divider().padding(.leading, 18)
+                        }
+                    }
+                }
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("日常起床时间")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: store.config.dailyWakeHour) { newValue in
+            if pendingHour == newValue { pendingHour = nil }
+        }
     }
 }
