@@ -368,8 +368,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "potato card/PotatoCard.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = F992GAYUKE;
+				CURRENT_PROJECT_VERSION = 12;
+				DEVELOPMENT_TEAM = BK368UYPY3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -403,7 +403,7 @@
 					"-framework",
 					HealthKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.xiaogousi.online;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -423,8 +423,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "potato card/PotatoCard.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = F992GAYUKE;
+				CURRENT_PROJECT_VERSION = 12;
+				DEVELOPMENT_TEAM = BK368UYPY3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -458,7 +458,7 @@
 					"-framework",
 					HealthKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.xiaogousi.online;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -477,8 +477,8 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = F992GAYUKE;
+				CURRENT_PROJECT_VERSION = 12;
+				DEVELOPMENT_TEAM = BK368UYPY3;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -490,7 +490,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.xiaogousi.online.transferliveactivitywidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app.transfer-live-activity-widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -509,9 +509,9 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 12;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = F992GAYUKE;
+				DEVELOPMENT_TEAM = BK368UYPY3;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TransferLiveActivityWidget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
@@ -521,7 +521,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.xiaogousi.online.transferliveactivitywidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app.transfer-live-activity-widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
