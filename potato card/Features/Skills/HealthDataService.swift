@@ -167,14 +167,15 @@ final class HealthDataService: @unchecked Sendable {
         let samples = try await querySamples(store: store, type: type, predicate: predicate)
         guard !samples.isEmpty else { throw HealthSkillError.noData(.sleep) }
 
-        // 先把所有 sample 按时间正序分割成「睡眠会话」：相邻样本间隔 ≤ 45 分钟视作同一晚。
+        // 先把所有 sample 按时间正序分割成「睡眠会话」：相邻样本间隔 < 2 小时视作同一晚。
         // HealthKit 一晚会产出几十个子样本（深睡/REM/核心/清醒…），不能按单 sample 分桶。
+        // 阈值放宽到 2 小时是为了把「夜里起来上厕所/喝水后再睡」这种短中断也算回同一晚的睡眠。
         let sortedByStart = samples.sorted { $0.startDate < $1.startDate }
         var sessions: [[HKCategorySample]] = []
         var currentSession: [HKCategorySample] = []
         var sessionMaxEnd: Date?
         for sample in sortedByStart {
-            if let lastEnd = sessionMaxEnd, sample.startDate.timeIntervalSince(lastEnd) > 45 * 60 {
+            if let lastEnd = sessionMaxEnd, sample.startDate.timeIntervalSince(lastEnd) >= 2 * 60 * 60 {
                 sessions.append(currentSession)
                 currentSession = []
                 sessionMaxEnd = nil
@@ -286,12 +287,13 @@ final class HealthDataService: @unchecked Sendable {
         guard !samples.isEmpty else { return SleepSessionStats() }
         let sorted = samples.sorted { $0.startDate < $1.startDate }
 
-        // 选「最后一个 endDate 所属的连续会话」：从最后一个样本往前回溯，相邻间隔 ≤ 45 分钟视为同一晚。
+        // 选「最后一个 endDate 所属的连续会话」：从最后一个样本往前回溯，相邻间隔 < 2 小时视为同一晚。
+        // 与 fetchSleepSnapshotImpl 里的分段阈值保持一致，避免两处口径漂移。
         guard let last = sorted.last else { return SleepSessionStats() }
         var session: [HKCategorySample] = [last]
         var pointer = last.startDate
         for sample in sorted.reversed().dropFirst() {
-            if pointer.timeIntervalSince(sample.endDate) <= 45 * 60 {
+            if pointer.timeIntervalSince(sample.endDate) < 2 * 60 * 60 {
                 session.append(sample)
                 pointer = min(pointer, sample.startDate)
             } else {
