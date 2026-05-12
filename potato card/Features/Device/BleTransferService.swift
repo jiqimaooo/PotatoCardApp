@@ -317,6 +317,9 @@ final class BleTransferService: ObservableObject {
     @Published private(set) var lastBackgroundShortcutTransfer: BackgroundShortcutTransferRecord?
     @Published private(set) var displayedBatteryPercent: Int?
     @Published private(set) var batteryDisplayState: BatteryDisplayState = .empty
+    // “正在同步”的发起方标识符。天气 / 健康 等技能在发起传输前调用 beginSync(source:)，
+    // 传输结束后调用 endSync(source:)。UI 层按 "source == 自己" 决定哪个按钮走进度动画。
+    @Published private(set) var currentSyncSource: String?
     private var wantsForegroundAutoScan = false
     private var lastBatteryByDeviceID: [String: DeviceBatterySnapshot]
     private var batteryRefreshTimeoutTask: Task<Void, Never>?
@@ -462,6 +465,17 @@ final class BleTransferService: ObservableObject {
         appendDiagnosticLog("稍后连接当前设备")
         if connectionPhase != .connected {
             connectionPhase = .idle
+        }
+    }
+
+    // 同步发起方标识符。同一时间只可能有一个 source 在同步，UI 层据此决定谁的按钮走动画。
+    func beginSync(source: String) {
+        currentSyncSource = source
+    }
+
+    func endSync(source: String) {
+        if currentSyncSource == source {
+            currentSyncSource = nil
         }
     }
 
@@ -720,6 +734,8 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
     @Published private(set) var lastBackgroundShortcutTransfer: BackgroundShortcutTransferRecord?
     @Published private(set) var displayedBatteryPercent: Int?
     @Published private(set) var batteryDisplayState: BatteryDisplayState = .empty
+    // “正在同步”的发起方标识符（与模拟器版同义）。
+    @Published private(set) var currentSyncSource: String?
     private var wantsForegroundAutoScan = false
     private var lastBatteryByDeviceID: [String: DeviceBatterySnapshot]
     private var batteryRefreshTimeoutTask: Task<Void, Never>?
@@ -870,6 +886,17 @@ final class BleTransferService: NSObject, ObservableObject, PickBleManagerDelega
         appendDiagnosticLog("稍后连接当前设备")
         if connectionPhase != .connected {
             connectionPhase = .idle
+        }
+    }
+
+    // 同步发起方标识符（与模拟器版同义）。
+    func beginSync(source: String) {
+        currentSyncSource = source
+    }
+
+    func endSync(source: String) {
+        if currentSyncSource == source {
+            currentSyncSource = nil
         }
     }
 

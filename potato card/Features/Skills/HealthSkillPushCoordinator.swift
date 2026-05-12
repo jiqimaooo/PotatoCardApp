@@ -98,14 +98,15 @@ final class HealthSkillPushCoordinator {
         }
 
         let snapshot: HealthSnapshot
+        let dailyWakeHour = store.config.dailyWakeHour
         do {
             switch mode {
             case .sleep:
-                snapshot = .sleep(try await service.fetchSleepSnapshot())
+                snapshot = .sleep(try await service.fetchSleepSnapshot(dailyWakeHour: dailyWakeHour))
             case .fitness:
                 snapshot = .fitness(try await service.fetchFitnessSnapshot())
             case .daily:
-                snapshot = .daily(try await service.fetchDailySnapshot())
+                snapshot = .daily(try await service.fetchDailySnapshot(dailyWakeHour: dailyWakeHour))
             }
         } catch let healthError as HealthSkillError {
             throw HealthPushError.dataUnavailable(healthError.localizedDescription)

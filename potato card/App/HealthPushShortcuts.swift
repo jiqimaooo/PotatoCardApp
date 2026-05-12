@@ -35,28 +35,39 @@ enum HealthDashboardModeIntent: String, AppEnum, CaseIterable {
 
 struct HealthPushIntent: AppIntent {
     static let title: LocalizedStringResource = "健康看板推送"
-    static let description = IntentDescription("把指定模式的健康看板推送到已绑定的墨水屏设备。")
+    static let description = IntentDescription("把指定模式的健康看板推送到已绑定的墨水屏设备。未指定模式时使用 App 内当前选中的默认看板。")
     static let openAppWhenRun = false
 
-    @Parameter(title: "看板模式", description: "选择要推送的健康看板模式")
-    var mode: HealthDashboardModeIntent
+    // mode 设为可选：用户在快捷指令编辑器里可以留空（使用 App 当前默认看板），
+    // 也可以挑「睡眠 / 健身 / 一日总结」覆盖。
+    @Parameter(
+        title: "看板模式",
+        description: "留空时使用 App 内设定的默认看板"
+    )
+    var mode: HealthDashboardModeIntent?
 
     private static let logger = Logger(subsystem: "com.xiaogousi.online.potato-card", category: "HealthShortcut")
 
-    init() {
-        self.mode = .daily
-    }
+    init() {}
 
-    init(mode: HealthDashboardModeIntent) {
+    init(mode: HealthDashboardModeIntent?) {
         self.mode = mode
     }
 
     func perform() async -> some IntentResult & ProvidesDialog {
         let message: String
-        Self.logger.info("健康推送快捷指令开始执行 mode=\(self.mode.rawValue, privacy: .public)")
+        // 没有显式参数 → 走配置里的 defaultMode；快捷指令也能尊重用户的当前设置。
+        let explicitMode = self.mode
+        let resolvedMode: HealthDashboardMode
+        if let explicitMode {
+            resolvedMode = explicitMode.domainMode
+        } else {
+            resolvedMode = await MainActor.run { HealthSkillStore().config.defaultMode }
+        }
+        Self.logger.info("健康推送快捷指令开始执行 mode=\(resolvedMode.rawValue, privacy: .public) explicit=\(explicitMode != nil, privacy: .public)")
         do {
             message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
-                mode: mode.domainMode,
+                mode: resolvedMode,
                 waitForFinalResult: false
             )
             Self.logger.info("健康推送成功：\(message, privacy: .public)")

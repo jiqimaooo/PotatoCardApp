@@ -211,10 +211,45 @@ enum WeatherSkillRenderer {
 
     // 保留 targetSize 参数是为了兼容现有调用方。
     // 实际渲染始终返回固定 400x600 的天气屏幕图。
+    //
+    // 缓存最近一次渲染结果：SwiftUI 在改 @Published config（如更新频率、模板）时
+    // 会把所有挂着同一个 store 的 view body 重算一遍。各处的 previewImage 是
+    // 计算属性，每次 body 都会同步跑 400x600 的位图绘制，单次大约 50~100ms，
+    // 在真机上叠加多个 view + List List 行高估算就会变得明显卡顿。
+    // 这里加一个单槽 LRU：(snapshot, template) 相同时直接复用上一次的 UIImage。
+    private static let cacheLock = NSLock()
+    private static var cachedSnapshot: WeatherSkillSnapshot?
+    private static var cachedTemplate: WeatherDisplayTemplate?
+    private static var cachedImage: UIImage?
+
     static func renderDisplayImage(
         snapshot: WeatherSkillSnapshot,
         template: WeatherDisplayTemplate,
         targetSize _: CGSize
+    ) -> UIImage {
+        cacheLock.lock()
+        if let cached = cachedImage,
+           cachedTemplate == template,
+           cachedSnapshot == snapshot {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let image = renderUncached(snapshot: snapshot, template: template)
+
+        cacheLock.lock()
+        cachedSnapshot = snapshot
+        cachedTemplate = template
+        cachedImage = image
+        cacheLock.unlock()
+
+        return image
+    }
+
+    private static func renderUncached(
+        snapshot: WeatherSkillSnapshot,
+        template: WeatherDisplayTemplate
     ) -> UIImage {
         let rendererFormat = UIGraphicsImageRendererFormat()
         rendererFormat.scale = 1

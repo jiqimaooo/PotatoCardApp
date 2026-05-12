@@ -23,6 +23,9 @@ final class HealthSkillStore: ObservableObject {
     private let userDefaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    // 专用的后台串行队列，避免 JSON encode + UserDefaults 写入挤占主线程，
+    // 让 picker / toggle 等 UI 操作能立刻返回。
+    private static let persistQueue = DispatchQueue(label: "health.skill.store.persist", qos: .utility)
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -69,6 +72,11 @@ final class HealthSkillStore: ObservableObject {
         persistConfiguration()
     }
 
+    func updateDailyWakeHour(_ hour: Int) {
+        config.dailyWakeHour = max(0, min(23, hour))
+        persistConfiguration()
+    }
+
     func updateImageAlgorithm(_ algorithm: EInkDitherAlgorithm) {
         config.imageAlgorithm = algorithm
         persistConfiguration()
@@ -110,32 +118,42 @@ final class HealthSkillStore: ObservableObject {
     }
 
     func refresh(mode: HealthDashboardMode? = nil) async {
-        guard config.isEnabled else {
-            loadState = .idle
-            return
-        }
+        // 进入详情页查看数据不应被「开关 / 推送启用」挡住，开关只控制
+        // 后台同步和推送行为。这里把 isEnabled 守卫去掉，让用户授权后
+        // 一定能在 UI 上看到当前 HealthKit 真实数据（或一份空态）。
         guard service.isAvailable else {
             loadState = .failed(HealthSkillError.healthDataUnavailable.localizedDescription)
             return
         }
 
         let targetMode = mode ?? config.defaultMode
+        let dailyWakeHour = config.dailyWakeHour
         loadState = .loading
         do {
             switch targetMode {
             case .sleep:
-                let value = try await service.fetchSleepSnapshot()
+                let value = try await service.fetchSleepSnapshot(dailyWakeHour: dailyWakeHour)
                 snapshot = .sleep(value)
             case .fitness:
                 let value = try await service.fetchFitnessSnapshot()
                 snapshot = .fitness(value)
             case .daily:
-                let value = try await service.fetchDailySnapshot()
+                let value = try await service.fetchDailySnapshot(dailyWakeHour: dailyWakeHour)
                 snapshot = .daily(value)
             }
             loadState = .loaded
-        } catch let HealthSkillError.noData(mode) {
-            loadState = .failed(HealthSkillError.noData(mode).localizedDescription)
+        } catch let HealthSkillError.noData(noDataMode) {
+            // 真的没数据时，构造一个对应模式的空 snapshot，让 renderer 走
+            // mode-specific 空态（"尚未读到最近一晚的睡眠数据" / "今日还没动" 等），
+            // 而不是回到通用占位图。
+            snapshot = HealthSnapshot(
+                mode: noDataMode,
+                updatedAt: Date(),
+                sleep: nil,
+                fitness: nil,
+                daily: nil
+            )
+            loadState = .failed(HealthSkillError.noData(noDataMode).localizedDescription)
         } catch {
             // HealthKit 授权未通过时通常表现为没有数据可读。
             loadState = .failed(error.localizedDescription)
@@ -149,8 +167,13 @@ final class HealthSkillStore: ObservableObject {
     }
 
     private func persistConfiguration() {
-        guard let data = try? encoder.encode(config) else { return }
-        userDefaults.set(data, forKey: Constants.configurationKey)
+        // 同样把 JSON encode + UserDefaults 写入给到后台串行队列，
+        // 避免 picker / toggle 类 UI 操作同步阻塞主线程。
+        let snapshot = config
+        Self.persistQueue.async { [encoder, userDefaults] in
+            guard let data = try? encoder.encode(snapshot) else { return }
+            userDefaults.set(data, forKey: Constants.configurationKey)
+        }
     }
 
     private static func loadConfiguration(decoder: JSONDecoder, userDefaults: UserDefaults) -> HealthSkillConfiguration {
