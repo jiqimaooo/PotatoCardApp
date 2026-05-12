@@ -22,14 +22,19 @@ enum HealthSkillRenderer {
     private enum Palette {
         static let background = UIColor(red: 0.96, green: 0.95, blue: 0.91, alpha: 1)
         static let outline = UIColor.black
-        static let divider = UIColor(white: 0.72, alpha: 1)
+        // 分割线：原 0.72 在 Bayer 8x8 抖动后只剩 ~28% 黑点，1px 细线几乎被米色背景吞掉。
+        // 压到 0.18 让 dither 后大部分像素落到黑色调色板上，整条线在墨水屏上清晰可辨；
+        // 配合 drawDivider 把线宽提到 2px，避免 1px 子像素被抖动算法吃掉。
+        static let divider = UIColor(white: 0.18, alpha: 1)
         static let accentSleep = UIColor(red: 0.32, green: 0.32, blue: 0.62, alpha: 1)
         static let accentFitness = UIColor(red: 0.88, green: 0.16, blue: 0.16, alpha: 1)
         static let accentDaily = UIColor(red: 0.95, green: 0.56, blue: 0.06, alpha: 1)
         static let ringEnergy = UIColor(red: 0.93, green: 0.09, blue: 0.34, alpha: 1)
         static let ringExercise = UIColor(red: 0.41, green: 0.78, blue: 0.27, alpha: 1)
         static let ringStand = UIColor(red: 0.18, green: 0.71, blue: 0.86, alpha: 1)
-        static let ringTrack = UIColor(white: 0.84, alpha: 1)
+        // 三环未填充部分的底色。0.84 在 6 色墨水屏 Bayer 抖动后几乎全白，跟米色背景糊在一起完全看不出环的轮廓。
+        // 压到 0.5 中灰，dither 后约一半黑像素，能清楚看到完整一圈的轨迹，又不会比填充色更黑而抢戏。
+        static let ringTrack = UIColor(white: 0.5, alpha: 1)
         static let secondaryText = UIColor(white: 0.30, alpha: 1)
     }
 
@@ -409,11 +414,11 @@ enum HealthSkillRenderer {
         }
         drawText(
             "活动",
-            font: .systemFont(ofSize: 16, weight: .heavy),
+            font: .systemFont(ofSize: 18, weight: .heavy),
             color: Palette.outline,
-            rect: CGRect(x: 38, y: 322, width: 140, height: 22),
+            rect: CGRect(x: 38, y: 322, width: 140, height: 24),
             alignment: .center,
-            strokeWidth: -4.0
+            strokeWidth: -2.0
         )
 
         // 右侧三行：与活动三环颜色对应
@@ -430,25 +435,25 @@ enum HealthSkillRenderer {
             context.fillEllipse(in: CGRect(x: metricsX, y: y + 14, width: 12, height: 12))
             drawText(
                 row.1,
-                font: .systemFont(ofSize: 14, weight: .semibold),
+                font: .systemFont(ofSize: 16, weight: .semibold),
                 color: Palette.outline,
-                rect: CGRect(x: metricsX + 20, y: y, width: 160, height: 20),
+                rect: CGRect(x: metricsX + 20, y: y, width: 160, height: 22),
                 alignment: .left,
-                strokeWidth: -4.0
+                strokeWidth: -2.0
             )
             drawText(
                 row.2,
-                font: .monospacedDigitSystemFont(ofSize: 36, weight: .heavy),
+                font: .monospacedDigitSystemFont(ofSize: 38, weight: .heavy),
                 color: Palette.outline,
-                rect: CGRect(x: metricsX + 20, y: y + 18, width: 130, height: 44),
+                rect: CGRect(x: metricsX + 20, y: y + 18, width: 130, height: 46),
                 alignment: .left,
-                strokeWidth: -4.0
+                strokeWidth: -2.0
             )
             drawText(
                 row.3,
-                font: .systemFont(ofSize: 13, weight: .semibold),
+                font: .systemFont(ofSize: 14, weight: .semibold),
                 color: Palette.secondaryText,
-                rect: CGRect(x: metricsX + 20, y: y + 58, width: 160, height: 18),
+                rect: CGRect(x: metricsX + 20, y: y + 58, width: 160, height: 20),
                 alignment: .left
             )
         }
@@ -463,11 +468,11 @@ enum HealthSkillRenderer {
         // 第 1 组：今日运动
         drawText(
             "今日运动",
-            font: .systemFont(ofSize: 16, weight: .heavy),
+            font: .systemFont(ofSize: 18, weight: .heavy),
             color: Palette.outline,
-            rect: CGRect(x: Layout.outerMargin, y: 366, width: 200, height: 22),
+            rect: CGRect(x: Layout.outerMargin, y: 366, width: 200, height: 24),
             alignment: .left,
-            strokeWidth: -4.0
+            strokeWidth: -2.0
         )
         let movementEntries: [(String, String, String)] = [
             ("步数", "\(snapshot.stepCount)", "步"),
@@ -481,11 +486,11 @@ enum HealthSkillRenderer {
         // 文字宽度紧凑，所以这里把数字字号压到 24，确保 "心率" 类标题始终一行。
         drawText(
             "身体指标",
-            font: .systemFont(ofSize: 16, weight: .heavy),
+            font: .systemFont(ofSize: 18, weight: .heavy),
             color: Palette.outline,
-            rect: CGRect(x: Layout.outerMargin, y: 476, width: 200, height: 22),
+            rect: CGRect(x: Layout.outerMargin, y: 476, width: 200, height: 24),
             alignment: .left,
-            strokeWidth: -4.0
+            strokeWidth: -2.0
         )
         let restingLabel = snapshot.restingHeartRate.map { "\(Int($0.rounded()))" } ?? "—"
         let avgHRLabel = snapshot.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "—"
@@ -512,25 +517,25 @@ enum HealthSkillRenderer {
             let originX = Layout.outerMargin + CGFloat(index) * cellWidth
             drawText(
                 entry.0,
-                font: .systemFont(ofSize: 14, weight: .semibold),
+                font: .systemFont(ofSize: 16, weight: .semibold),
                 color: Palette.outline,
-                rect: CGRect(x: originX, y: originY, width: cellWidth - 4, height: 20),
+                rect: CGRect(x: originX, y: originY, width: cellWidth - 4, height: 22),
                 alignment: .left,
-                strokeWidth: -4.0
+                strokeWidth: -2.0
             )
             drawText(
                 entry.1,
-                font: .monospacedDigitSystemFont(ofSize: 26, weight: .heavy),
+                font: .monospacedDigitSystemFont(ofSize: 28, weight: .heavy),
                 color: Palette.outline,
-                rect: CGRect(x: originX, y: originY + 20, width: cellWidth - 4, height: 34),
+                rect: CGRect(x: originX, y: originY + 22, width: cellWidth - 4, height: 36),
                 alignment: .left,
-                strokeWidth: -4.0
+                strokeWidth: -2.0
             )
             drawText(
                 entry.2,
-                font: .systemFont(ofSize: 13, weight: .semibold),
+                font: .systemFont(ofSize: 14, weight: .semibold),
                 color: Palette.secondaryText,
-                rect: CGRect(x: originX, y: originY + 54, width: cellWidth - 4, height: 18),
+                rect: CGRect(x: originX, y: originY + 56, width: cellWidth - 4, height: 20),
                 alignment: .left
             )
         }
@@ -753,7 +758,7 @@ enum HealthSkillRenderer {
             from: CGPoint(x: Layout.outerMargin, y: y),
             to: CGPoint(x: Layout.canvasSize.width - Layout.outerMargin, y: y),
             color: Palette.divider,
-            width: 1,
+            width: 2,
             in: context
         )
     }
@@ -808,23 +813,12 @@ enum HealthSkillRenderer {
     }
 
     private static func drawText(_ text: String, font: UIFont, color: UIColor, rect: CGRect, alignment: NSTextAlignment) {
-        // 自动判断字体重量：bold 及以上加更粗的 stroke，medium/regular 加一层细 stroke，
-        // 让所有文字在墨水屏 Bayer 8x8 抖动后都能保留笔画。两档差异够明显，仍能区分主次。
-        // 中文 +1pt 由 strokeWidth 重载里统一处理，这里不再重复。
+        // 自动判断字体重量：bold 及以上加一层描边，medium/regular 只靠填充。
+        // 描边原本是 -4 / -2，实际看上去太胖，压到 -2 / -0.5 后笔画仍能靠 Bayer 8x8 留住，但整体纤细一个档。
         let weight = (font.fontDescriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any])?[.weight] as? CGFloat ?? 0
         let isBold = weight >= UIFont.Weight.semibold.rawValue
-        let stroke: CGFloat = isBold ? -4.0 : -2.0
+        let stroke: CGFloat = isBold ? -2.0 : -0.5
         drawText(text, font: font, color: color, rect: rect, alignment: alignment, strokeWidth: stroke)
-    }
-
-    private static func containsChinese(_ text: String) -> Bool {
-        for scalar in text.unicodeScalars {
-            // CJK Unified Ideographs (常用汉字) + Extension A 区间。
-            if (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value) {
-                return true
-            }
-        }
-        return false
     }
 
     // strokeWidth 的单位是 font point 的百分比（带负号 = fill+stroke）。
@@ -840,12 +834,8 @@ enum HealthSkillRenderer {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
         paragraph.lineBreakMode = .byTruncatingTail
-        // 中文字号 +1pt，与 drawText 默认入口的处理保持一致，让 fitness 等显式指定描边的调用也受益。
-        let effectiveFont = containsChinese(text)
-            ? font.withSize(font.pointSize + 1)
-            : font
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: effectiveFont,
+            .font: font,
             .foregroundColor: color,
             .paragraphStyle: paragraph
         ]
