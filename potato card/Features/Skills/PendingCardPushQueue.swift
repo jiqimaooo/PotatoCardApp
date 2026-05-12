@@ -25,7 +25,7 @@ struct PendingCardPushTask: Codable, Identifiable, Equatable {
 enum PendingCardPushQueue {
     private static let folderName = "PendingCardPush"
     private static let indexFileName = "pending-card-push.json"
-    nonisolated(unsafe) private static let logger = Logger(
+    nonisolated private static let logger = Logger(
         subsystem: "com.xiaogousi.online.potato-card",
         category: "PendingCardPushQueue"
     )

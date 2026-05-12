@@ -7,9 +7,9 @@ import SwiftUI
 @MainActor
 final class WeatherAutoUpdateScheduler: ObservableObject {
     fileprivate enum Constants {
-        static let taskIdentifier = "com.liyouliang.potatocard.weather-refresh"
-        static let lastAttemptKey = "weatherAutoUpdateLastAttemptAt"
-        static let minimumForegroundCheckInterval: TimeInterval = 5 * 60
+        nonisolated static let taskIdentifier = "com.liyouliang.potatocard.weather-refresh"
+        nonisolated static let lastAttemptKey = "weatherAutoUpdateLastAttemptAt"
+        nonisolated static let minimumForegroundCheckInterval: TimeInterval = 5 * 60
     }
 
     private let logger = Logger(subsystem: "com.xiaogousi.online.potato-card", category: "WeatherAutoUpdate")
@@ -192,8 +192,10 @@ extension WeatherAutoUpdateScheduler {
     // 一次性注册容器：BGTaskScheduler.register 只能在 app finishLaunching 之前调用一次。
     // 用 dispatch_once 等价的 NSLock + Bool flag 保证幂等，且支持 nonisolated 调用（@main App init 是 nonisolated）。
     final class Once {
-        private let lock = NSLock()
-        private var didRun = false
+        nonisolated private let lock = NSLock()
+        nonisolated(unsafe) private var didRun = false
+
+        nonisolated init() {}
 
         nonisolated func run() {
             lock.lock()
@@ -217,6 +219,5 @@ extension WeatherAutoUpdateScheduler {
         }
     }
 
-    nonisolated(unsafe) static let registerBackgroundTaskOnce = Once()
+    nonisolated static let registerBackgroundTaskOnce = Once()
 }
-

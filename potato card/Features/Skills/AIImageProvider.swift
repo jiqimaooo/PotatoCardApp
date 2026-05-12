@@ -13,14 +13,13 @@ struct AIImageGenerationRequest {
 }
 
 extension AIImageGenerationRequest {
-    @MainActor
-    func writeDebugLog(_ message: String) {
-        debugLog?(message)
+    nonisolated func writeDebugLog(_ message: String) async {
+        await debugLog?(message)
     }
 }
 
 protocol AIImageProvider {
-    func generateImageData(request: AIImageGenerationRequest) async throws -> Data
+    nonisolated func generateImageData(request: AIImageGenerationRequest) async throws -> Data
 }
 
 enum AIImageGenerationError: LocalizedError {
@@ -31,7 +30,7 @@ enum AIImageGenerationError: LocalizedError {
     case keychain(String)
     case remote(String, rawLog: String? = nil)
 
-    var errorDescription: String? {
+    nonisolated var errorDescription: String? {
         switch self {
         case .missingPrompt:
             return "Prompt 不能为空。"
@@ -50,7 +49,7 @@ enum AIImageGenerationError: LocalizedError {
 }
 
 enum AIImageProviderFactory {
-    static func provider(for kind: AIImageModelProvider) -> AIImageProvider {
+    nonisolated static func provider(for kind: AIImageModelProvider) -> AIImageProvider {
         switch kind {
         case .openAI:
             return OpenAIImageProvider()
@@ -65,7 +64,7 @@ enum AIImageProviderFactory {
 }
 
 struct OpenAIImageProvider: AIImageProvider {
-    func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
+    nonisolated func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
         await request.writeDebugLog("OpenAI: 准备图片生成请求，model=\(request.model), size=\(request.size.openAIRequestSize)")
         let body: [String: Any] = [
             "model": request.model,
@@ -88,7 +87,7 @@ struct OpenAIImageProvider: AIImageProvider {
 }
 
 struct GeminiImageProvider: AIImageProvider {
-    func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
+    nonisolated func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
         let encodedModel = request.model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? request.model
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(encodedModel):generateContent")!
         await request.writeDebugLog("Gemini: 准备图片生成请求，model=\(request.model)")
@@ -118,7 +117,7 @@ struct GeminiImageProvider: AIImageProvider {
 }
 
 struct AliWanxImageProvider: AIImageProvider {
-    func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
+    nonisolated func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
         await request.writeDebugLog("通义万相: 准备异步图片生成任务，model=\(request.model), size=\(request.size.dashScopeRequestSize)")
         let body: [String: Any] = [
             "model": request.model,
@@ -148,7 +147,7 @@ struct AliWanxImageProvider: AIImageProvider {
         return try await AIImageHTTPClient.download(url: imageURL, debugLog: request.debugLog)
     }
 
-    private func pollTask(taskID: String, apiKey: String, debugLog: AIImageDebugLogger?) async throws -> URL {
+    nonisolated private func pollTask(taskID: String, apiKey: String, debugLog: AIImageDebugLogger?) async throws -> URL {
         let endpoint = URL(string: "https://dashscope.aliyuncs.com/api/v1/tasks/\(taskID)")!
         for index in 0..<36 {
             try await Task.sleep(nanoseconds: 2_000_000_000)
@@ -169,7 +168,7 @@ struct AliWanxImageProvider: AIImageProvider {
 }
 
 struct DoubaoSeedreamImageProvider: AIImageProvider {
-    func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
+    nonisolated func generateImageData(request: AIImageGenerationRequest) async throws -> Data {
         let model = normalizedModel(request.model)
         await request.writeDebugLog("豆包 Seedream: 准备图片生成请求，model=\(model)")
         let body: [String: Any] = [
@@ -193,7 +192,7 @@ struct DoubaoSeedreamImageProvider: AIImageProvider {
         return try AIImageResponseParser.decodeOpenAIImageData(data)
     }
 
-    private func normalizedModel(_ model: String) -> String {
+    nonisolated private func normalizedModel(_ model: String) -> String {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch normalized {
         case "doubao-seedream-4.0", "doubao-seedream-4-0", "doubao-seedream-4":
@@ -207,7 +206,7 @@ struct DoubaoSeedreamImageProvider: AIImageProvider {
 }
 
 private enum AIImageHTTPClient {
-    static func postJSON(url: URL, headers: [String: String], body: [String: Any], timeoutInterval: TimeInterval, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
+    nonisolated static func postJSON(url: URL, headers: [String: String], body: [String: Any], timeoutInterval: TimeInterval, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = timeoutInterval
@@ -217,20 +216,20 @@ private enum AIImageHTTPClient {
         return try await perform(request, debugLog: debugLog)
     }
 
-    static func get(url: URL, headers: [String: String], timeoutInterval: TimeInterval = 60, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
+    nonisolated static func get(url: URL, headers: [String: String], timeoutInterval: TimeInterval = 60, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeoutInterval
         headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         return try await perform(request, debugLog: debugLog)
     }
 
-    static func download(url: URL, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
+    nonisolated static func download(url: URL, debugLog: AIImageDebugLogger? = nil) async throws -> Data {
         var request = URLRequest(url: url)
         request.timeoutInterval = 120
         return try await perform(request, debugLog: debugLog)
     }
 
-    private static func perform(_ request: URLRequest, debugLog: AIImageDebugLogger?) async throws -> Data {
+    nonisolated private static func perform(_ request: URLRequest, debugLog: AIImageDebugLogger?) async throws -> Data {
         await debugLog?("HTTP: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "-")")
         let data: Data
         let response: URLResponse
@@ -253,7 +252,7 @@ private enum AIImageHTTPClient {
 }
 
 private enum AIImageResponseParser {
-    static func decodeOpenAIImageData(_ data: Data) throws -> Data {
+    nonisolated static func decodeOpenAIImageData(_ data: Data) throws -> Data {
         let response: OpenAIImageResponse
         do {
             response = try JSONDecoder().decode(OpenAIImageResponse.self, from: data)
@@ -274,7 +273,7 @@ private enum AIImageResponseParser {
         throw AIImageGenerationError.invalidResponse
     }
 
-    static func decodeGeminiImageData(_ data: Data) throws -> Data {
+    nonisolated static func decodeGeminiImageData(_ data: Data) throws -> Data {
         let response: GeminiImageResponse
         do {
             response = try JSONDecoder().decode(GeminiImageResponse.self, from: data)
@@ -290,7 +289,7 @@ private enum AIImageResponseParser {
         throw AIImageGenerationError.invalidResponse
     }
 
-    static func decodeDashScopeTaskID(_ data: Data) throws -> String {
+    nonisolated static func decodeDashScopeTaskID(_ data: Data) throws -> String {
         let response: DashScopeSubmitResponse
         do {
             response = try JSONDecoder().decode(DashScopeSubmitResponse.self, from: data)
@@ -303,7 +302,7 @@ private enum AIImageResponseParser {
         return taskID
     }
 
-    static func decodeDashScopeTaskResult(_ data: Data) throws -> URL? {
+    nonisolated static func decodeDashScopeTaskResult(_ data: Data) throws -> URL? {
         let response: DashScopeTaskResponse
         do {
             response = try JSONDecoder().decode(DashScopeTaskResponse.self, from: data)
@@ -328,7 +327,7 @@ private enum AIImageResponseParser {
         }
     }
 
-    static func decodeFlexibleImageData(_ data: Data) throws -> Data {
+    nonisolated static func decodeFlexibleImageData(_ data: Data) throws -> Data {
         if let response = try? JSONDecoder().decode(OpenAIImageResponse.self, from: data),
            let item = response.data.first {
             if let b64 = item.b64Json, let imageData = Data(base64Encoded: b64) {
@@ -416,7 +415,7 @@ private struct DashScopeTaskResponse: Decodable {
 }
 
 private enum UIImageDataProbe {
-    static func isImage(_ data: Data) -> Bool {
+    nonisolated static func isImage(_ data: Data) -> Bool {
         data.starts(with: [0x89, 0x50, 0x4E, 0x47]) || data.starts(with: [0xFF, 0xD8, 0xFF])
     }
 }

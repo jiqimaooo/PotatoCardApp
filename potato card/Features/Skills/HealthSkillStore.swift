@@ -170,9 +170,10 @@ final class HealthSkillStore: ObservableObject {
         // 同样把 JSON encode + UserDefaults 写入给到后台串行队列，
         // 避免 picker / toggle 类 UI 操作同步阻塞主线程。
         let snapshot = config
-        Self.persistQueue.async { [encoder, userDefaults] in
+        let userDefaultsBox = SendableUserDefaultsBox(userDefaults)
+        Self.persistQueue.async { [encoder, userDefaultsBox] in
             guard let data = try? encoder.encode(snapshot) else { return }
-            userDefaults.set(data, forKey: Constants.configurationKey)
+            userDefaultsBox.userDefaults.set(data, forKey: Constants.configurationKey)
         }
     }
 

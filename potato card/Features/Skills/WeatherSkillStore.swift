@@ -249,9 +249,10 @@ final class WeatherSkillStore: ObservableObject {
         // 依赖 WeatherSkillConfiguration : Codable + Sendable-by-value。拍一份快照后
         // 扔到后台队列同步处理 encode + UserDefaults，主线程不被阻塞。
         let snapshot = config
-        Self.persistQueue.async { [encoder, userDefaults] in
+        let userDefaultsBox = SendableUserDefaultsBox(userDefaults)
+        Self.persistQueue.async { [encoder, userDefaultsBox] in
             guard let data = try? encoder.encode(snapshot) else { return }
-            userDefaults.set(data, forKey: Constants.configurationKey)
+            userDefaultsBox.userDefaults.set(data, forKey: Constants.configurationKey)
         }
     }
 

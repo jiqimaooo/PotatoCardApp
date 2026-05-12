@@ -11,7 +11,7 @@
 import Foundation
 
 enum CachedSDKDeviceDictStore {
-    private static let key = "cachedSDKDeviceDictByDeviceID"
+    nonisolated private static let key = "cachedSDKDeviceDictByDeviceID"
 
     nonisolated static func save(deviceID: String, rawDevice: [AnyHashable: Any]) {
         let trimmedID = deviceID.trimmingCharacters(in: .whitespacesAndNewlines)

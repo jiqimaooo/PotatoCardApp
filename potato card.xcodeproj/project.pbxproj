@@ -52,6 +52,7 @@
 			membershipExceptions = (
 				Info.plist,
 				PotatoCard.entitlements,
+				Vendor/PickBleManager/libPIckBleManager.a,
 			);
 			target = A86A54252F894613001EC8F6 /* potato card */;
 		};
@@ -385,12 +386,6 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
@@ -442,12 +437,6 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;

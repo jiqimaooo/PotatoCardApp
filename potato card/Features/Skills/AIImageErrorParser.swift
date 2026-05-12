@@ -5,17 +5,17 @@ struct AIImageParsedError: LocalizedError, Equatable {
     let suggestion: String
     let rawLog: String
 
-    var errorDescription: String? {
+    nonisolated var errorDescription: String? {
         message
     }
 
-    var recoverySuggestion: String? {
+    nonisolated var recoverySuggestion: String? {
         suggestion
     }
 }
 
 enum AIImageErrorParser {
-    static func parse(_ error: Error, provider: AIImageModelProvider? = nil) -> AIImageParsedError {
+    nonisolated static func parse(_ error: Error, provider: AIImageModelProvider? = nil) -> AIImageParsedError {
         if let parsed = error as? AIImageParsedError {
             return parsed
         }
@@ -31,7 +31,7 @@ enum AIImageErrorParser {
         return parseRawLog(lowercased, rawLog: rawLog, fallbackMessage: "服务返回异常")
     }
 
-    static func parseHTTP(statusCode: Int, data: Data, url: URL?) -> AIImageParsedError {
+    nonisolated static func parseHTTP(statusCode: Int, data: Data, url: URL?) -> AIImageParsedError {
         let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body, \(data.count) bytes>"
         let rawLog = """
         HTTP \(statusCode)
@@ -42,7 +42,7 @@ enum AIImageErrorParser {
         return parseRawLog(body.lowercased(), rawLog: rawLog, statusCode: statusCode, fallbackMessage: "服务返回异常")
     }
 
-    static func parseResponseDecodeError(_ error: Error, data: Data, context: String) -> AIImageParsedError {
+    nonisolated static func parseResponseDecodeError(_ error: Error, data: Data, context: String) -> AIImageParsedError {
         let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body, \(data.count) bytes>"
         let rawLog = """
         \(context)
@@ -53,7 +53,7 @@ enum AIImageErrorParser {
         return parseRawLog(body.lowercased(), rawLog: rawLog, fallbackMessage: "服务返回异常")
     }
 
-    private static func parseGenerationError(_ error: AIImageGenerationError, provider: AIImageModelProvider?) -> AIImageParsedError {
+    nonisolated private static func parseGenerationError(_ error: AIImageGenerationError, provider: AIImageModelProvider?) -> AIImageParsedError {
         switch error {
         case .missingPrompt:
             return AIImageParsedError(message: "Prompt 不能为空", suggestion: "请输入一段用于生成图片的描述。", rawLog: "missingPrompt")
@@ -70,7 +70,7 @@ enum AIImageErrorParser {
         }
     }
 
-    private static func parseURLError(_ error: URLError) -> AIImageParsedError {
+    nonisolated private static func parseURLError(_ error: URLError) -> AIImageParsedError {
         switch error.code {
         case .timedOut:
             return AIImageParsedError(message: "请求超时", suggestion: "请稍后重试，或检查当前网络是否稳定。", rawLog: "URLError timedOut: \(error)")
@@ -81,7 +81,7 @@ enum AIImageErrorParser {
         }
     }
 
-    private static func parseRawLog(_ lowercased: String, rawLog: String, statusCode: Int? = nil, fallbackMessage: String) -> AIImageParsedError {
+    nonisolated private static func parseRawLog(_ lowercased: String, rawLog: String, statusCode: Int? = nil, fallbackMessage: String) -> AIImageParsedError {
         if statusCode == 429 || lowercased.contains("resource_exhausted") || lowercased.contains("quota") || lowercased.contains("rate limit") {
             return AIImageParsedError(message: "配额不足", suggestion: "请检查账号余额、调用额度或稍后再试。", rawLog: rawLog)
         }
