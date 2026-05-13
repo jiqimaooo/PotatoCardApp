@@ -471,45 +471,57 @@ enum WeatherSkillRenderer {
             return
         }
 
+        let separatorX = rect.minX + 140
+        let rightContentX = separatorX + 12
+        let rightContentWidth = rect.maxX - rightContentX - 12
         let valueColor = color(from: airQuality.colorHex)
-        drawText(
+        let valueRect = CGRect(x: rect.minX + 12, y: rect.minY + 34, width: separatorX - rect.minX - 22, height: 74)
+        drawFittedText(
             clampedAQIText(airQuality.aqiText),
-            font: .systemFont(ofSize: 72, weight: .bold),
+            maxFontSize: 72,
+            minFontSize: 56,
+            weight: .bold,
             color: valueColor,
-            rect: CGRect(x: rect.minX + 20, y: rect.minY + 36, width: 98, height: 72),
-            alignment: .left
+            rect: valueRect,
+            alignment: .left,
+            monospacedDigit: true
         )
 
         drawLine(
-            from: CGPoint(x: rect.minX + 126, y: rect.minY + 16),
-            to: CGPoint(x: rect.minX + 126, y: rect.maxY - 16),
+            from: CGPoint(x: separatorX, y: rect.minY + 16),
+            to: CGPoint(x: separatorX, y: rect.maxY - 16),
             color: style.divider,
             width: 1
         )
 
-        let badgeRect = CGRect(x: rect.minX + 178, y: rect.minY + 10, width: 76, height: 34)
+        let badgeRect = CGRect(x: rightContentX + 28, y: rect.minY + 10, width: rightContentWidth - 56, height: 34)
         let badgePath = UIBezierPath(roundedRect: badgeRect, cornerRadius: 17)
         valueColor.setFill()
         badgePath.fill()
-        drawText(
+        drawFittedText(
             airQuality.category,
-            font: .systemFont(ofSize: 26, weight: .bold),
+            maxFontSize: 26,
+            minFontSize: 17,
+            weight: .bold,
             color: .white,
             rect: badgeRect,
             alignment: .center
         )
 
-        let barRect = CGRect(x: rect.minX + 142, y: rect.minY + 60, width: 218, height: 8)
+        let barRect = CGRect(x: rightContentX, y: rect.minY + 60, width: rightContentWidth, height: 8)
         drawAQIBar(in: barRect)
         drawAQIPointer(value: Int(airQuality.aqiText) ?? 0, in: barRect, style: style)
-        drawAQIScale(in: barRect, rightEdge: rect.maxX - 4, style: style)
+        drawAQIScale(in: barRect, rightEdge: rect.maxX - 12, style: style)
 
-        let summary = airQualitySummaryText(airQuality)
-        drawText(
+        let summaryRect = CGRect(x: rightContentX, y: rect.minY + 88, width: rightContentWidth, height: 18)
+        let summary = airQualitySummaryText(airQuality, fittingWidth: summaryRect.width)
+        drawFittedText(
             summary,
-            font: .systemFont(ofSize: 15, weight: .semibold),
+            maxFontSize: 14,
+            minFontSize: 11,
+            weight: .semibold,
             color: style.foreground,
-            rect: CGRect(x: rect.minX + 142, y: rect.minY + 88, width: 226, height: 18),
+            rect: summaryRect,
             alignment: .left
         )
     }
@@ -1223,6 +1235,66 @@ enum WeatherSkillRenderer {
         NSString(string: text).draw(in: rect.integral, withAttributes: attributes)
     }
 
+    // AQI 模块空间固定，关键文字需要在框内自动缩字号，避免三位数和污染等级被裁切。
+    private static func drawFittedText(
+        _ text: String,
+        maxFontSize: CGFloat,
+        minFontSize: CGFloat,
+        weight: UIFont.Weight,
+        color: UIColor,
+        rect: CGRect,
+        alignment: NSTextAlignment,
+        monospacedDigit: Bool = false
+    ) {
+        let font = fittedFont(
+            for: text,
+            maxFontSize: maxFontSize,
+            minFontSize: minFontSize,
+            weight: weight,
+            rect: rect,
+            monospacedDigit: monospacedDigit
+        )
+        drawText(text, font: font, color: color, rect: rect, alignment: alignment)
+    }
+
+    private static func fittedFont(
+        for text: String,
+        maxFontSize: CGFloat,
+        minFontSize: CGFloat,
+        weight: UIFont.Weight,
+        rect: CGRect,
+        monospacedDigit: Bool
+    ) -> UIFont {
+        let upper = max(maxFontSize, minFontSize)
+        let lower = min(maxFontSize, minFontSize)
+        var size = upper
+        while size > lower {
+            let font = renderFont(size: size, weight: weight, monospacedDigit: monospacedDigit)
+            let measuredSize = singleLineSize(text, font: font)
+            if measuredSize.width <= rect.width {
+                return font
+            }
+            size -= 1
+        }
+        return renderFont(size: lower, weight: weight, monospacedDigit: monospacedDigit)
+    }
+
+    private static func renderFont(size: CGFloat, weight: UIFont.Weight, monospacedDigit: Bool) -> UIFont {
+        if monospacedDigit {
+            return .monospacedDigitSystemFont(ofSize: size, weight: weight)
+        }
+        return .systemFont(ofSize: size, weight: weight)
+    }
+
+    private static func singleLineSize(_ text: String, font: UIFont) -> CGSize {
+        let size = NSString(string: text).size(withAttributes: [.font: font])
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }
+
+    private static func textFits(_ text: String, width: CGFloat, font: UIFont) -> Bool {
+        singleLineSize(text, font: font).width <= width
+    }
+
     private static func drawAttributedText(_ attributedText: NSAttributedString, rect: CGRect) {
         attributedText.draw(in: rect.integral)
     }
@@ -1339,17 +1411,36 @@ enum WeatherSkillRenderer {
         return String(trimmed.prefix(3))
     }
 
-    // 生成 AQI 模块右下角的短说明文字。
-    private static func airQualitySummaryText(_ airQuality: WeatherSkillSnapshot.AirQuality) -> String {
-        if airQuality.category == "优" || airQuality.category.lowercased() == "excellent" {
-            return "空气质量优，适合外出活动"
+    // 生成 AQI 模块右下角的短说明文字。空间不足时优先去掉“空气质量”前缀。
+    private static func airQualitySummaryText(
+        _ airQuality: WeatherSkillSnapshot.AirQuality,
+        fittingWidth width: CGFloat
+    ) -> String {
+        let category = airQuality.category.trimmed
+        let primaryPollutant = airQuality.primaryPollutant.trimmed
+        let candidates: [String]
+
+        if category == "优" || category.lowercased() == "excellent" {
+            candidates = [
+                "空气质量优，适合外出活动",
+                "优，适合外出活动",
+                "优"
+            ]
+        } else if primaryPollutant.isEmpty {
+            candidates = [
+                "空气质量\(category)",
+                category
+            ]
+        } else {
+            candidates = [
+                "空气质量\(category)，首要污染物 \(primaryPollutant)",
+                "\(category)，首要污染物 \(primaryPollutant)",
+                "\(category) · \(primaryPollutant)"
+            ]
         }
 
-        if airQuality.primaryPollutant.trimmed.isEmpty {
-            return "空气质量\(airQuality.category)"
-        }
-
-        return "空气质量\(airQuality.category)，首要污染物\(airQuality.primaryPollutant)"
+        let summaryFont = UIFont.systemFont(ofSize: 14, weight: .semibold)
+        return candidates.first { textFits($0, width: width, font: summaryFont) } ?? candidates.last ?? ""
     }
 
     // AQI 颜色在 Store 中已归一化为 hex，这里转换成 UIColor。

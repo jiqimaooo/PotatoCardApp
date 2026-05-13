@@ -252,6 +252,8 @@ enum EInkImageRenderer {
             return image
         }
 
+        applyOriginalPreDitherEnhancement(to: &context.pixels, algorithm: algorithm)
+
         // convert.js 里的原始算法本身是硬阈值映射，照片会丢大量灰阶。
         // 这里保留原始颜色集合，但先用 Floyd-Steinberg 扩散误差，让真机照片保留更多层次。
         applyErrorDiffusion(
@@ -368,6 +370,48 @@ enum EInkImageRenderer {
             ]
         case .floydSteinberg, .atkinson, .sierraLite, .bayer8x8, .nearestColor:
             return EInkSixColorPalette.colors
+        }
+    }
+
+    private static func applyOriginalPreDitherEnhancement(to pixels: inout [UInt8], algorithm: EInkDitherAlgorithm) {
+        guard let profile = originalEnhancementProfile(for: algorithm) else { return }
+
+        for pixelIndex in 0..<(pixels.count / 4) {
+            let sourceIndex = pixelIndex * 4
+            var red = Double(pixels[sourceIndex])
+            var green = Double(pixels[sourceIndex + 1])
+            var blue = Double(pixels[sourceIndex + 2])
+
+            let luminance = red * 0.30 + green * 0.59 + blue * 0.11
+            red = luminance + (red - luminance) * profile.saturation
+            green = luminance + (green - luminance) * profile.saturation
+            blue = luminance + (blue - luminance) * profile.saturation
+
+            red = ((red - 128) * profile.contrast + 128 + profile.brightness).clampedToByteRange
+            green = ((green - 128) * profile.contrast + 128 + profile.brightness).clampedToByteRange
+            blue = ((blue - 128) * profile.contrast + 128 + profile.brightness).clampedToByteRange
+
+            // 小程序输出更深，传输前压暗中间调，减少真机上发灰发浅的问题。
+            red = pow(red / 255, profile.gamma) * 255
+            green = pow(green / 255, profile.gamma) * 255
+            blue = pow(blue / 255, profile.gamma) * 255
+
+            pixels[sourceIndex] = UInt8(red.clampedToByteRange.rounded())
+            pixels[sourceIndex + 1] = UInt8(green.clampedToByteRange.rounded())
+            pixels[sourceIndex + 2] = UInt8(blue.clampedToByteRange.rounded())
+        }
+    }
+
+    private static func originalEnhancementProfile(for algorithm: EInkDitherAlgorithm) -> EInkOriginalEnhancementProfile? {
+        switch algorithm {
+        case .original6Color, .original1600Split:
+            return EInkOriginalEnhancementProfile(contrast: 1.22, saturation: 1.48, brightness: -10, gamma: 1.08)
+        case .original7Color:
+            return EInkOriginalEnhancementProfile(contrast: 1.16, saturation: 1.32, brightness: -6, gamma: 1.05)
+        case .originalBWRY:
+            return EInkOriginalEnhancementProfile(contrast: 1.12, saturation: 1.18, brightness: -4, gamma: 1.03)
+        case .originalBW, .floydSteinberg, .atkinson, .sierraLite, .bayer8x8, .nearestColor:
+            return nil
         }
     }
 
@@ -609,6 +653,13 @@ private struct EInkDiffusionStep {
     let factor: Double
 }
 
+private struct EInkOriginalEnhancementProfile {
+    let contrast: Double
+    let saturation: Double
+    let brightness: Double
+    let gamma: Double
+}
+
 private enum EInkDiffusionKernel {
     static let floydSteinberg = [
         EInkDiffusionStep(x: 1, y: 0, factor: 7.0 / 16.0),
@@ -706,7 +757,7 @@ private enum EInkOriginalColorCode: Int {
         case .blue:
             return EInkDitherColor(red: 0, green: 0, blue: 255)
         case .green:
-            return EInkDitherColor(red: 0, green: 160, blue: 0)
+            return EInkDitherColor(red: 0, green: 255, blue: 0)
         }
     }
 }
