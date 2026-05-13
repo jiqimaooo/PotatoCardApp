@@ -26,6 +26,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>需要使用蓝牙搜索并连接墨水屏设备，用于传输图片。</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>需要读取你的健康数据，用于生成睡眠、运动和一日总结看板，并同步显示到你的墨水屏设备。</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>健康看板功能不会主动写入健康数据；如后续需要写入，将仅在你授权后用于同步相关健康记录。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>需要定位当前城市天气，用于天气技能同步到墨水屏。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要将 AI 生成图片保存到系统照片应用。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -39,14 +49,6 @@
 			</dict>
 		</dict>
 	</dict>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>需要使用蓝牙搜索并连接墨水屏设备，用于传输图片。</string>
-	<key>NSHealthUpdateUsageDescription</key>
-	<string>用于同步和更新健康数据。</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>需要定位当前城市天气，用于天气技能同步到墨水屏。</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>需要将 AI 生成图片保存到系统照片应用。</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
