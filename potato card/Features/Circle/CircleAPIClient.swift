@@ -20,6 +20,37 @@ struct CircleAPIClient {
     var tokenProvider: () -> String?
     var urlSession: URLSession = .shared
 
+    func createRegisterOptions(rawDeviceIdentifier: String, username: String) async throws -> CirclePasskeyRegistrationOptions {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/register/options"))
+        request.httpMethod = "POST"
+        request.setJSONBody([
+            "rawDeviceIdentifier": rawDeviceIdentifier,
+            "username": username,
+        ])
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CirclePasskeyRegistrationOptions.self, from: data)
+    }
+
+    func verifyRegistration(
+        rawDeviceIdentifier: String,
+        username: String,
+        avatarKey: String,
+        challenge: String,
+        response: CirclePasskeyRegistrationResponse
+    ) async throws -> CircleAuthSession {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/register/verify"))
+        request.httpMethod = "POST"
+        request.setJSONBody(RegisterVerifyBody(
+            rawDeviceIdentifier: rawDeviceIdentifier,
+            username: username,
+            avatarKey: avatarKey,
+            challenge: challenge,
+            response: response
+        ))
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleAuthSession.self, from: data)
+    }
+
     func fetchPosts() async throws -> [CirclePost] {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
         attachAuth(to: &request)
@@ -83,5 +114,20 @@ struct CircleAPIClient {
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
         data.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
         data.append("\(value)\r\n".data(using: .utf8)!)
+    }
+
+    private struct RegisterVerifyBody: Encodable {
+        let rawDeviceIdentifier: String
+        let username: String
+        let avatarKey: String
+        let challenge: String
+        let response: CirclePasskeyRegistrationResponse
+    }
+}
+
+private extension URLRequest {
+    mutating func setJSONBody<T: Encodable>(_ body: T) {
+        setValue("application/json", forHTTPHeaderField: "Content-Type")
+        httpBody = try? JSONEncoder().encode(body)
     }
 }

@@ -1,10 +1,17 @@
+import PhotosUI
 import SwiftUI
 
 struct CircleRegistrationView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @ObservedObject var sessionStore: CircleSessionStore
+    let apiClient: CircleAPIClient
+
+    @StateObject private var passkeyService = CirclePasskeyService()
+    @State private var selectedAvatarItem: PhotosPickerItem?
+    @State private var avatarData: Data?
     @State private var username = ""
     @State private var errorMessage: String?
+    @State private var isRegistering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -17,14 +24,21 @@ struct CircleRegistrationView: View {
 
             deviceState
 
+            PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
+                Label(avatarData == nil ? "选择头像" : "已选择头像", systemImage: "person.crop.circle")
+            }
+            .buttonStyle(.bordered)
+            .disabled(isRegistering)
+
             TextField("用户名", text: $username)
                 .textFieldStyle(.roundedBorder)
+                .disabled(isRegistering)
 
-            Button("创建通行密钥并注册") {
+            Button(isRegistering ? "注册中" : "创建通行密钥并注册") {
                 register()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(activeDevice == nil || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(activeDevice == nil || avatarData == nil || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRegistering)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -35,6 +49,9 @@ struct CircleRegistrationView: View {
             Spacer()
         }
         .padding(24)
+        .task(id: selectedAvatarItem) {
+            avatarData = try? await selectedAvatarItem?.loadTransferable(type: Data.self)
+        }
     }
 
     private var deviceState: some View {
@@ -55,6 +72,31 @@ struct CircleRegistrationView: View {
     }
 
     private func register() {
-        errorMessage = "请先连接圈子服务器后再注册"
+        guard let activeDevice else { return }
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUsername.isEmpty else { return }
+
+        isRegistering = true
+        errorMessage = nil
+        Task {
+            do {
+                let options = try await apiClient.createRegisterOptions(
+                    rawDeviceIdentifier: activeDevice.id,
+                    username: trimmedUsername
+                )
+                let passkeyResponse = try await passkeyService.createRegistration(options: options)
+                let session = try await apiClient.verifyRegistration(
+                    rawDeviceIdentifier: activeDevice.id,
+                    username: trimmedUsername,
+                    avatarKey: "avatars/\(UUID().uuidString).jpg",
+                    challenge: options.challenge,
+                    response: passkeyResponse
+                )
+                sessionStore.saveSession(token: session.accessToken, profile: session.profile)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isRegistering = false
+        }
     }
 }

@@ -34,7 +34,7 @@ struct CircleView: View {
                     }
                 }
             } else {
-                CircleRegistrationView(sessionStore: sessionStore)
+                CircleRegistrationView(sessionStore: sessionStore, apiClient: apiClient)
             }
         }
         .onAppear {
