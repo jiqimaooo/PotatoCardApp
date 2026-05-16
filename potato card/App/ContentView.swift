@@ -12,6 +12,7 @@ struct ContentView: View {
     private enum Tab: Hashable {
         case home
         case gallery
+        case circle
         case todo
         case skills
     }
@@ -48,6 +49,14 @@ struct ContentView: View {
                     Label("图库", systemImage: "photo.on.rectangle")
                 }
                 .tag(Tab.gallery)
+
+            tabContent(.circle) {
+                circleTab
+            }
+                .tabItem {
+                    Label("圈子", systemImage: "person.2")
+                }
+                .tag(Tab.circle)
 
             tabContent(.todo) {
                 todoTab
@@ -142,6 +151,18 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 22)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var circleTab: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                backgroundColor
+                    .ignoresSafeArea()
+
+                CircleView()
             }
             .toolbar(.hidden, for: .navigationBar)
         }
