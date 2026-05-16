@@ -23,3 +23,8 @@ build/
 # 专辑照片（本地保留，不上传）
 #potato\ card/Resources/Assets.xcassets/jay_chou_album_covers_png/
 #potato\ card/Resources/Assets.xcassets/stefanie_sun_album_covers_png/
+
+# 本地工作流文档和临时工作区
+docs/
+.superpowers/
+.worktrees/
