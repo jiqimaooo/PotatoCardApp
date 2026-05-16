@@ -31,7 +31,12 @@ struct CircleView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        CircleFeedView(posts: posts, onTransfer: handleTransfer, onReport: handleReport)
+                        CircleFeedView(
+                            posts: posts,
+                            onTransfer: handleTransfer,
+                            onReport: handleReport,
+                            onRefresh: refreshPosts
+                        )
                     }
                     if let visibleErrorMessage {
                         Text(visibleErrorMessage)
@@ -60,17 +65,30 @@ struct CircleView: View {
     }
 
     private var header: some View {
-        HStack {
-            Text("圈子")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-            Spacer()
-            Button("发布") {
-                isComposerPresented = true
+        HStack(alignment: .center, spacing: 18) {
+            HStack(spacing: 20) {
+                CircleFeedTab(title: "发现", isSelected: true)
+                CircleFeedTab(title: "关注", isSelected: false)
+                CircleFeedTab(title: "最新", isSelected: false)
             }
-            .buttonStyle(.bordered)
+            Spacer()
+
+            Button {
+                isComposerPresented = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Color(red: 0.86, green: 0.16, blue: 0.22), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("发布")
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 22)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(Color(.systemBackground))
     }
 
     private var visibleErrorMessage: String? {
@@ -78,11 +96,14 @@ struct CircleView: View {
     }
 
     private func handleTransfer(_ post: CirclePost) {
-        guard let accessToken = sessionStore.token else {
-            handleExpiredSession()
-            return
+        Task {
+            do {
+                let accessToken = try await validAccessToken()
+                transferCoordinator.beginTransfer(post: post, apiClient: sessionAPIClient, accessToken: accessToken, bleService: bleService)
+            } catch {
+                handleSessionError(error)
+            }
         }
-        transferCoordinator.beginTransfer(post: post, apiClient: sessionAPIClient, accessToken: accessToken, bleService: bleService)
     }
 
     private func handleReport(_ post: CirclePost) {
@@ -99,33 +120,77 @@ struct CircleView: View {
         errorMessage = nil
         Task {
             do {
-                posts = try await sessionAPIClient.fetchPosts()
+                posts = try await fetchPostsWithRefresh()
             } catch {
-                errorMessage = error.localizedDescription
+                handleSessionError(error)
             }
             isLoadingPosts = false
         }
     }
 
     private func publish(imageData: Data, title: String, tags: [String]) {
-        guard let accessToken = sessionStore.token else {
-            handleExpiredSession()
-            return
-        }
         Task {
             do {
-                try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: accessToken)
-                posts = try await sessionAPIClient.fetchPosts()
+                try await createPostWithRefresh(imageData: imageData, title: title, tags: tags)
+                posts = try await fetchPostsWithRefresh()
             } catch {
-                errorMessage = error.localizedDescription
+                handleSessionError(error)
             }
         }
+    }
+
+    private func fetchPostsWithRefresh() async throws -> [CirclePost] {
+        _ = try await validAccessToken()
+        do {
+            return try await sessionAPIClient.fetchPosts()
+        } catch CircleAPIError.unauthorized {
+            _ = try await validAccessToken(forceRefresh: true)
+            return try await sessionAPIClient.fetchPosts()
+        }
+    }
+
+    private func createPostWithRefresh(imageData: Data, title: String, tags: [String]) async throws {
+        let accessToken = try await validAccessToken()
+        do {
+            try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: accessToken)
+        } catch CircleAPIError.unauthorized {
+            let refreshedToken = try await validAccessToken(forceRefresh: true)
+            try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshedToken)
+        }
+    }
+
+    private func validAccessToken(forceRefresh: Bool = false) async throws -> String {
+        guard let refreshToken = sessionStore.refreshToken else {
+            throw CircleAPIError.missingAuthToken
+        }
+
+        if forceRefresh || sessionStore.shouldRefreshAccessToken {
+            let session = try await apiClient.refreshSession(refreshToken: refreshToken)
+            sessionStore.saveSession(session)
+        }
+
+        guard let accessToken = sessionStore.token else {
+            throw CircleAPIError.missingAuthToken
+        }
+        return accessToken
     }
 
     private func handleExpiredSession() {
         errorMessage = CircleAPIError.missingAuthToken.localizedDescription
         sessionStore.signOut()
         isComposerPresented = false
+    }
+
+    private func handleSessionError(_ error: Error) {
+        if case CircleAPIError.unauthorized = error {
+            handleExpiredSession()
+            return
+        }
+        if case CircleAPIError.missingAuthToken = error {
+            handleExpiredSession()
+            return
+        }
+        errorMessage = error.localizedDescription
     }
 
     private static func defaultAPIClient() -> CircleAPIClient {
@@ -136,5 +201,23 @@ struct CircleView: View {
                 return token.isEmpty ? nil : token
             }
         )
+    }
+}
+
+private struct CircleFeedTab: View {
+    let title: String
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 17, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+
+            Capsule()
+                .fill(isSelected ? Color(red: 0.86, green: 0.16, blue: 0.22) : Color.clear)
+                .frame(width: 24, height: 3)
+        }
+        .contentShape(Rectangle())
     }
 }

@@ -5,6 +5,7 @@ enum CircleAPIError: LocalizedError {
     case invalidResponse
     case httpStatus(Int)
     case missingAuthToken
+    case unauthorized
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +14,8 @@ enum CircleAPIError: LocalizedError {
         case .httpStatus(let status):
             return "服务器请求失败：\(status)"
         case .missingAuthToken:
+            return "登录状态已失效，请重新登录"
+        case .unauthorized:
             return "登录状态已失效，请重新登录"
         }
     }
@@ -78,6 +81,14 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleAuthSession.self, from: data)
     }
 
+    func refreshSession(refreshToken: String) async throws -> CircleAuthSession {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/refresh"))
+        request.httpMethod = "POST"
+        request.setJSONBody(["refreshToken": refreshToken])
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleAuthSession.self, from: data)
+    }
+
     func fetchPosts() async throws -> [CirclePost] {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
         attachAuth(to: &request)
@@ -133,6 +144,7 @@ struct CircleAPIClient {
     private func perform(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw CircleAPIError.invalidResponse }
+        if http.statusCode == 401 { throw CircleAPIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw CircleAPIError.httpStatus(http.statusCode) }
         return data
     }

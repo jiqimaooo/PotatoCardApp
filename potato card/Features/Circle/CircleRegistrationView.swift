@@ -520,7 +520,7 @@ struct CircleRegistrationView: View {
                     password: password.trimmingCharacters(in: .whitespacesAndNewlines),
                     avatarKey: "avatars/\(UUID().uuidString).jpg"
                 )
-                sessionStore.saveSession(token: session.accessToken, profile: session.profile)
+                sessionStore.saveSession(session)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -541,7 +541,7 @@ struct CircleRegistrationView: View {
                     username: trimmedUsername,
                     password: password.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
-                sessionStore.saveSession(token: session.accessToken, profile: session.profile)
+                sessionStore.saveSession(session)
             } catch {
                 errorMessage = error.localizedDescription
             }
