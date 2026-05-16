@@ -32,6 +32,19 @@
 	<string>需要定位当前城市天气，用于天气技能同步到墨水屏。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>需要将 AI 生成图片保存到系统照片应用。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>192.168.100.112</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

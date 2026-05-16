@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CircleView: View {
+    @EnvironmentObject private var bleService: BleTransferService
     @StateObject private var sessionStore = CircleSessionStore()
     @StateObject private var transferCoordinator: CircleTransferCoordinator
     @State private var posts: [CirclePost] = []
@@ -9,6 +10,12 @@ struct CircleView: View {
     @State private var isLoadingPosts = false
 
     private let apiClient: CircleAPIClient
+
+    private var sessionAPIClient: CircleAPIClient {
+        var client = apiClient
+        client.tokenProvider = { sessionStore.token }
+        return client
+    }
 
     init(apiClient: CircleAPIClient = CircleView.defaultAPIClient()) {
         self.apiClient = apiClient
@@ -45,18 +52,6 @@ struct CircleView: View {
             guard isRegistered else { return }
             loadPostsIfNeeded()
         }
-        .sheet(item: $transferCoordinator.transferRequest) { request in
-            TransferSheetView(
-                sourceImage: request.image,
-                title: request.post.title,
-                editStateKey: nil,
-                onTransferSucceeded: {
-                    transferCoordinator.transferRequest = nil
-                }
-            )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
         .sheet(isPresented: $isComposerPresented) {
             CirclePostComposerView { imageData, title, tags in
                 publish(imageData: imageData, title: title, tags: tags)
@@ -79,11 +74,15 @@ struct CircleView: View {
     }
 
     private var visibleErrorMessage: String? {
-        transferCoordinator.errorMessage ?? errorMessage
+        transferCoordinator.errorMessage ?? bleService.errorMessage ?? errorMessage
     }
 
     private func handleTransfer(_ post: CirclePost) {
-        transferCoordinator.beginTransfer(post: post)
+        guard let accessToken = sessionStore.token else {
+            handleExpiredSession()
+            return
+        }
+        transferCoordinator.beginTransfer(post: post, apiClient: sessionAPIClient, accessToken: accessToken, bleService: bleService)
     }
 
     private func handleReport(_ post: CirclePost) {
@@ -100,7 +99,7 @@ struct CircleView: View {
         errorMessage = nil
         Task {
             do {
-                posts = try await apiClient.fetchPosts()
+                posts = try await sessionAPIClient.fetchPosts()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -109,19 +108,29 @@ struct CircleView: View {
     }
 
     private func publish(imageData: Data, title: String, tags: [String]) {
+        guard let accessToken = sessionStore.token else {
+            handleExpiredSession()
+            return
+        }
         Task {
             do {
-                try await apiClient.createPost(imageData: imageData, title: title, tags: tags)
-                posts = try await apiClient.fetchPosts()
+                try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: accessToken)
+                posts = try await sessionAPIClient.fetchPosts()
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
     }
 
+    private func handleExpiredSession() {
+        errorMessage = CircleAPIError.missingAuthToken.localizedDescription
+        sessionStore.signOut()
+        isComposerPresented = false
+    }
+
     private static func defaultAPIClient() -> CircleAPIClient {
         CircleAPIClient(
-            baseURL: URL(string: "http://localhost:3000")!,
+            baseURL: URL(string: "https://potato.xiaogousi.online")!,
             tokenProvider: {
                 let token = UserDefaults.standard.string(forKey: "circleAccessToken") ?? ""
                 return token.isEmpty ? nil : token

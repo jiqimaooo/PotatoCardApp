@@ -4,6 +4,7 @@ import UIKit
 enum CircleAPIError: LocalizedError {
     case invalidResponse
     case httpStatus(Int)
+    case missingAuthToken
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ enum CircleAPIError: LocalizedError {
             return "服务器响应无效"
         case .httpStatus(let status):
             return "服务器请求失败：\(status)"
+        case .missingAuthToken:
+            return "登录状态已失效，请重新登录"
         }
     }
 }
@@ -51,6 +54,30 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleAuthSession.self, from: data)
     }
 
+    func registerWithPassword(rawDeviceIdentifier: String, username: String, password: String, avatarKey: String) async throws -> CircleAuthSession {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/password/register"))
+        request.httpMethod = "POST"
+        request.setJSONBody([
+            "rawDeviceIdentifier": rawDeviceIdentifier,
+            "username": username,
+            "password": password,
+            "avatarKey": avatarKey,
+        ])
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleAuthSession.self, from: data)
+    }
+
+    func loginWithPassword(username: String, password: String) async throws -> CircleAuthSession {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/password/login"))
+        request.httpMethod = "POST"
+        request.setJSONBody([
+            "username": username,
+            "password": password,
+        ])
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleAuthSession.self, from: data)
+    }
+
     func fetchPosts() async throws -> [CirclePost] {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
         attachAuth(to: &request)
@@ -60,18 +87,18 @@ struct CircleAPIClient {
         return try decoder.decode(CircleFeedResponse.self, from: data).items
     }
 
-    func transferTicket(postID: String) async throws -> CircleTransferTicket {
+    func transferTicket(postID: String, accessToken: String? = nil) async throws -> CircleTransferTicket {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts/\(postID)/transfer-ticket"))
         request.httpMethod = "POST"
-        attachAuth(to: &request)
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
         let data = try await perform(request)
         return try JSONDecoder().decode(CircleTransferTicket.self, from: data)
     }
 
-    func createPost(imageData: Data, title: String, tags: [String]) async throws {
+    func createPost(imageData: Data, title: String, tags: [String], accessToken: String? = nil) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
         request.httpMethod = "POST"
-        attachAuth(to: &request)
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
         let boundary = "Boundary-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = multipartBody(boundary: boundary, imageData: imageData, title: title, tags: tags)
@@ -87,8 +114,20 @@ struct CircleAPIClient {
     }
 
     private func attachAuth(to request: inout URLRequest) {
-        guard let token = tokenProvider() else { return }
+        guard let token = normalizedToken(tokenProvider()) else { return }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    private func attachRequiredAuth(to request: inout URLRequest, accessToken: String?) throws {
+        guard let token = normalizedToken(accessToken) ?? normalizedToken(tokenProvider()) else {
+            throw CircleAPIError.missingAuthToken
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    private func normalizedToken(_ token: String?) -> String? {
+        let value = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
     }
 
     private func perform(_ request: URLRequest) async throws -> Data {
