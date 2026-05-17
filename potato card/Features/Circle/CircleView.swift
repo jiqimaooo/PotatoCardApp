@@ -127,8 +127,8 @@ struct CircleView: View {
         HStack(alignment: .center, spacing: 18) {
             HStack(spacing: 20) {
                 CircleFeedTab(title: "发现", isSelected: true)
-                CircleFeedTab(title: "关注", isSelected: false)
-                CircleFeedTab(title: "最新", isSelected: false)
+                unavailableFeedTab(title: "关注")
+                unavailableFeedTab(title: "最新")
             }
             Spacer()
 
@@ -148,6 +148,16 @@ struct CircleView: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(Color(.systemBackground))
+    }
+
+    private func unavailableFeedTab(title: String) -> some View {
+        Button {
+            showToast("暂未开放，敬请期待", style: .info)
+        } label: {
+            CircleFeedTab(title: title, isSelected: false)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title)，暂未开放")
     }
 
     private var transferStatusState: CircleTransferStatusToast.StateStyle {
@@ -238,6 +248,7 @@ struct CircleView: View {
 
     private func loadPostsIfNeeded() {
         guard sessionStore.isRegistered, posts.isEmpty else { return }
+        restoreCachedPostsIfNeeded()
         refreshPosts()
     }
 
@@ -246,7 +257,9 @@ struct CircleView: View {
         isLoadingPosts = true
         Task {
             do {
-                posts = try await fetchPostsWithRefresh()
+                let fetchedPosts = try await fetchPostsWithRefresh()
+                posts = fetchedPosts
+                saveCachedPosts(fetchedPosts)
             } catch {
                 handleSessionError(error)
             }
@@ -261,7 +274,9 @@ struct CircleView: View {
                 try await createPostWithRefresh(imageData: imageData, title: title, tags: tags)
                 showPublishStatus(.succeeded)
                 do {
-                    posts = try await fetchPostsWithRefresh()
+                    let fetchedPosts = try await fetchPostsWithRefresh()
+                    posts = fetchedPosts
+                    saveCachedPosts(fetchedPosts)
                 } catch {
                     showToast("发布成功，但刷新失败：\(error.localizedDescription)", style: .error)
                 }
@@ -292,6 +307,17 @@ struct CircleView: View {
             let refreshedToken = try await validAccessToken(forceRefresh: true)
             try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshedToken)
         }
+    }
+
+    private func restoreCachedPostsIfNeeded() {
+        guard posts.isEmpty, let userID = sessionStore.profile?.id else { return }
+        guard let cachedPosts = CircleFeedPostCache.shared.loadPosts(for: userID) else { return }
+        posts = cachedPosts
+    }
+
+    private func saveCachedPosts(_ posts: [CirclePost]) {
+        guard let userID = sessionStore.profile?.id else { return }
+        CircleFeedPostCache.shared.savePosts(posts, for: userID)
     }
 
     private func validAccessToken(forceRefresh: Bool = false) async throws -> String {
@@ -407,6 +433,58 @@ struct CircleView: View {
                 return token.isEmpty ? nil : token
             }
         )
+    }
+}
+
+private final class CircleFeedPostCache {
+    static let shared = CircleFeedPostCache()
+
+    private let fileManager = FileManager.default
+    private let rootURL: URL
+
+    private init() {
+        let supportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        rootURL = supportURL.appendingPathComponent("PotatoCircleFeed", isDirectory: true)
+        createDirectoryIfNeeded(rootURL)
+        excludeFromBackup(rootURL)
+    }
+
+    func loadPosts(for userID: String) -> [CirclePost]? {
+        let fileURL = fileURL(for: userID)
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode([CirclePost].self, from: data)
+    }
+
+    func savePosts(_ posts: [CirclePost], for userID: String) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(posts) else { return }
+
+        createDirectoryIfNeeded(rootURL)
+        try? data.write(to: fileURL(for: userID), options: [.atomic])
+    }
+
+    private func fileURL(for userID: String) -> URL {
+        rootURL.appendingPathComponent(fileName(for: userID), isDirectory: false)
+    }
+
+    private func fileName(for userID: String) -> String {
+        userID.utf8.map { String(format: "%02x", $0) }.joined() + ".json"
+    }
+
+    private func createDirectoryIfNeeded(_ url: URL) {
+        try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    private func excludeFromBackup(_ url: URL) {
+        var mutableURL = url
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try? mutableURL.setResourceValues(resourceValues)
     }
 }
 

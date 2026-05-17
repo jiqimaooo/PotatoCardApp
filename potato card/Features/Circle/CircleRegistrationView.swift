@@ -509,7 +509,7 @@ struct CircleRegistrationView: View {
     }
 
     private func registerWithPassword() {
-        guard let activeDevice, isUsernameValid, isPasswordValid, avatarData != nil else { return }
+        guard let activeDevice, isUsernameValid, isPasswordValid, let avatarUploadData else { return }
 
         isRegistering = true
         toastMessage = nil
@@ -517,11 +517,12 @@ struct CircleRegistrationView: View {
         passwordFocused = false
         Task {
             do {
+                let avatarKey = try await apiClient.uploadAvatar(imageData: avatarUploadData)
                 let session = try await apiClient.registerWithPassword(
                     rawDeviceIdentifier: activeDevice.id,
                     username: trimmedUsername,
                     password: password.trimmingCharacters(in: .whitespacesAndNewlines),
-                    avatarKey: "avatars/\(UUID().uuidString).jpg"
+                    avatarKey: avatarKey
                 )
                 sessionStore.saveSession(session)
             } catch {
@@ -574,6 +575,12 @@ struct CircleRegistrationView: View {
                 }
             }
         }
+    }
+
+    private var avatarUploadData: Data? {
+        guard let avatarData else { return nil }
+        guard let image = UIImage(data: avatarData) else { return avatarData }
+        return image.jpegData(compressionQuality: 0.82)
     }
 }
 

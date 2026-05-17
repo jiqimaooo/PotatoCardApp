@@ -11,6 +11,7 @@ struct CirclePost: Codable, Equatable, Identifiable {
         let id: String
         let username: String
         let avatarKey: String
+        let avatarUrl: URL?
     }
 
     let id: String
@@ -22,6 +23,9 @@ struct CirclePost: Codable, Equatable, Identifiable {
     let targetHeight: Int?
     let colorMode: String?
     let transferCount: Int
+    let previewUrl: URL?
+    let previewWidth: Int?
+    let previewHeight: Int?
     let createdAt: Date
 }
 

@@ -70,6 +70,16 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleAuthSession.self, from: data)
     }
 
+    func uploadAvatar(imageData: Data) async throws -> String {
+        var request = URLRequest(url: baseURL.appendingPathComponent("auth/avatar"))
+        request.httpMethod = "POST"
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = avatarMultipartBody(boundary: boundary, imageData: imageData)
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleAvatarUploadResponse.self, from: data).avatarKey
+    }
+
     func loginWithPassword(username: String, password: String) async throws -> CircleAuthSession {
         var request = URLRequest(url: baseURL.appendingPathComponent("auth/password/login"))
         request.httpMethod = "POST"
@@ -161,6 +171,16 @@ struct CircleAPIClient {
         return data
     }
 
+    private func avatarMultipartBody(boundary: String, imageData: Data) -> Data {
+        var data = Data()
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"avatar.jpg\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        data.append(imageData)
+        data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        return data
+    }
+
     private func appendField(_ name: String, _ value: String, boundary: String, to data: inout Data) {
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
         data.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
@@ -173,6 +193,10 @@ struct CircleAPIClient {
         let avatarKey: String
         let challenge: String
         let response: CirclePasskeyRegistrationResponse
+    }
+
+    private struct CircleAvatarUploadResponse: Decodable {
+        let avatarKey: String
     }
 }
 

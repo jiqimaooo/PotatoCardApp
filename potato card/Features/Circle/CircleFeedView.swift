@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CircleFeedView: View {
     let posts: [CirclePost]
@@ -12,8 +13,16 @@ struct CircleFeedView: View {
                 CircleEmptyFeedView()
             } else {
                 HStack(alignment: .top, spacing: 10) {
-                    CircleMasonryColumn(posts: columns.left, onTransfer: onTransfer, onReport: onReport)
-                    CircleMasonryColumn(posts: columns.right, onTransfer: onTransfer, onReport: onReport)
+                    CircleMasonryColumn(
+                        posts: columns.left,
+                        onTransfer: onTransfer,
+                        onReport: onReport
+                    )
+                    CircleMasonryColumn(
+                        posts: columns.right,
+                        onTransfer: onTransfer,
+                        onReport: onReport
+                    )
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
@@ -90,7 +99,11 @@ private struct CirclePostCard: View {
                 }
 
                 HStack(spacing: 6) {
-                    CircleAvatarView(username: post.author.username, avatarKey: post.author.avatarKey)
+                    CircleAvatarView(
+                        username: post.author.username,
+                        avatarKey: post.author.avatarKey,
+                        avatarUrl: post.author.avatarUrl
+                    )
 
                     Text(post.author.username)
                         .font(.system(size: 11, weight: .medium))
@@ -135,22 +148,43 @@ private struct CirclePostCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.black.opacity(0.04), lineWidth: 0.5)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var lockedPreview: some View {
         ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: CircleFeedStyle.palette(for: post),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: CircleFeedStyle.palette(for: post),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
-                .frame(height: CircleFeedStyle.previewHeight(for: post))
-                .overlay(alignment: .center) {
+
+                if let previewUrl = post.previewUrl {
+                    CircleCachedPreviewImage(
+                        cacheKey: post.id,
+                        url: previewUrl,
+                        seed: CircleFeedStyle.seed(for: post)
+                    )
+                } else {
                     CircleFeedAbstractArtwork(seed: CircleFeedStyle.seed(for: post))
                 }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: CircleFeedStyle.previewHeight(for: post))
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.08),
+                        Color.black.opacity(0.28)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
                 .overlay(alignment: .bottomLeading) {
                     VStack(alignment: .leading, spacing: 4) {
                         Image(systemName: "lock.display")
@@ -171,6 +205,368 @@ private struct CirclePostCard: View {
                 .padding(.vertical, 5)
                 .background(.ultraThinMaterial, in: Capsule())
                 .padding(7)
+        }
+    }
+
+}
+
+private struct CircleCachedPreviewImage: View {
+    let cacheKey: String
+    let url: URL
+    let seed: Int
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            Group {
+                if let image {
+                    CircleServerPreviewImage(image: Image(uiImage: image))
+                } else {
+                    CircleFeedAbstractArtwork(seed: seed)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+        .onAppear(perform: loadIfNeeded)
+        .onChange(of: url) { _ in
+            loadIfNeeded()
+        }
+    }
+
+    private func loadIfNeeded() {
+        guard !isLoading else { return }
+        isLoading = true
+
+        let cacheKey = cacheKey
+        let url = url
+
+        Task {
+            if let cachedImage = await CircleImageDiskCache.shared.image(for: cacheKey, kind: .preview) {
+                await MainActor.run {
+                    image = cachedImage
+                    isLoading = false
+                }
+                return
+            }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard
+                    let httpResponse = response as? HTTPURLResponse,
+                    (200..<300).contains(httpResponse.statusCode),
+                    let loadedImage = UIImage(data: data)
+                else {
+                    await MainActor.run { isLoading = false }
+                    return
+                }
+
+                CircleImageDiskCache.shared.set(loadedImage, data: data, for: cacheKey, kind: .preview)
+                await MainActor.run {
+                    image = loadedImage
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                }
+            }
+        }
+    }
+}
+
+private struct CircleServerPreviewImage: View {
+    let image: Image
+
+    var body: some View {
+        image
+            .resizable()
+            .scaledToFill()
+            .scaleEffect(1.06)
+            .blur(radius: 14, opaque: true)
+            .saturation(0.9)
+            .contrast(0.94)
+            .overlay(Color.white.opacity(0.1))
+            .overlay(Color.black.opacity(0.12))
+            .clipped()
+    }
+}
+
+private struct CircleCachedAvatarImage: View {
+    let cacheKey: String
+    let url: URL
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+
+    init(cacheKey: String, url: URL) {
+        self.cacheKey = cacheKey
+        self.url = url
+        _image = State(initialValue: CircleImageDiskCache.shared.cachedImage(for: cacheKey, kind: .avatar))
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                EmptyView()
+            }
+        }
+        .onAppear(perform: loadIfNeeded)
+        .onChange(of: url) { _ in
+            loadIfNeeded()
+        }
+    }
+
+    private func loadIfNeeded() {
+        guard !isLoading else { return }
+        isLoading = true
+
+        let cacheKey = cacheKey
+        let url = url
+
+        Task {
+            if let cachedImage = await CircleImageDiskCache.shared.image(for: cacheKey, kind: .avatar) {
+                await MainActor.run {
+                    image = cachedImage
+                    isLoading = false
+                }
+                return
+            }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard
+                    let httpResponse = response as? HTTPURLResponse,
+                    (200..<300).contains(httpResponse.statusCode),
+                    let loadedImage = UIImage(data: data)
+                else {
+                    await MainActor.run { isLoading = false }
+                    return
+                }
+
+                CircleImageDiskCache.shared.set(loadedImage, data: data, for: cacheKey, kind: .avatar)
+                await MainActor.run {
+                    image = loadedImage
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                }
+            }
+        }
+    }
+}
+
+private final class CircleImageDiskCache: @unchecked Sendable {
+    static let shared = CircleImageDiskCache()
+
+    enum CacheKind {
+        case preview
+        case avatar
+
+        var directoryName: String {
+            switch self {
+            case .preview:
+                return "previews"
+            case .avatar:
+                return "avatars"
+            }
+        }
+
+        var memoryPrefix: String {
+            switch self {
+            case .preview:
+                return "preview"
+            case .avatar:
+                return "avatar"
+            }
+        }
+    }
+
+    private let cache = NSCache<NSString, UIImage>()
+    private let fileManager = FileManager.default
+    private let ioQueue = DispatchQueue(label: "com.xiaogousi.potatocard.circle-image-cache", qos: .utility)
+    private let previewLimitBytes: UInt64 = 5 * 1024 * 1024 * 1024
+    private let previewTargetBytes: UInt64 = 4 * 1024 * 1024 * 1024
+    private let rootURL: URL
+
+    private init() {
+        cache.countLimit = 240
+        cache.totalCostLimit = 120 * 1024 * 1024
+
+        let supportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        rootURL = supportURL.appendingPathComponent("PotatoCircleImages", isDirectory: true)
+        createDirectoryIfNeeded(directoryURL(for: .preview))
+        createDirectoryIfNeeded(directoryURL(for: .avatar))
+        excludeFromBackup(rootURL)
+        migrateLegacyCacheIfNeeded()
+    }
+
+    func image(for key: String, kind: CacheKind) async -> UIImage? {
+        let memoryKey = memoryKey(for: key, kind: kind)
+        if let memoryImage = cache.object(forKey: memoryKey as NSString) {
+            return memoryImage
+        }
+
+        return await withCheckedContinuation { continuation in
+            ioQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let fileURL = self.fileURL(for: key, kind: kind)
+                guard
+                    let data = try? Data(contentsOf: fileURL),
+                    let image = UIImage(data: data)
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                self.touch(fileURL)
+                self.cache.setObject(image, forKey: memoryKey as NSString, cost: self.memoryCost(for: image))
+                continuation.resume(returning: image)
+            }
+        }
+    }
+
+    func cachedImage(for key: String, kind: CacheKind) -> UIImage? {
+        let memoryKey = memoryKey(for: key, kind: kind)
+        if let memoryImage = cache.object(forKey: memoryKey as NSString) {
+            return memoryImage
+        }
+
+        let fileURL = fileURL(for: key, kind: kind)
+        guard
+            let data = try? Data(contentsOf: fileURL),
+            let image = UIImage(data: data)
+        else {
+            return nil
+        }
+
+        touch(fileURL)
+        cache.setObject(image, forKey: memoryKey as NSString, cost: memoryCost(for: image))
+        return image
+    }
+
+    func set(_ image: UIImage, data: Data, for key: String, kind: CacheKind) {
+        let memoryKey = memoryKey(for: key, kind: kind)
+        cache.setObject(image, forKey: memoryKey as NSString, cost: memoryCost(for: image))
+
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            let directoryURL = self.directoryURL(for: kind)
+            self.createDirectoryIfNeeded(directoryURL)
+
+            do {
+                try data.write(to: self.fileURL(for: key, kind: kind), options: [.atomic])
+                if kind == .preview {
+                    self.trimPreviewCacheIfNeeded()
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func memoryCost(for image: UIImage) -> Int {
+        let pixelCount = Int(image.size.width * image.scale * image.size.height * image.scale)
+        return pixelCount * 4
+    }
+
+    private func memoryKey(for key: String, kind: CacheKind) -> String {
+        "\(kind.memoryPrefix):\(key)"
+    }
+
+    private func directoryURL(for kind: CacheKind) -> URL {
+        rootURL.appendingPathComponent(kind.directoryName, isDirectory: true)
+    }
+
+    private func fileURL(for key: String, kind: CacheKind) -> URL {
+        directoryURL(for: kind).appendingPathComponent(fileName(for: key), isDirectory: false)
+    }
+
+    private func fileName(for key: String) -> String {
+        key.utf8.map { String(format: "%02x", $0) }.joined() + ".img"
+    }
+
+    private func createDirectoryIfNeeded(_ url: URL) {
+        try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    private func excludeFromBackup(_ url: URL) {
+        var mutableURL = url
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try? mutableURL.setResourceValues(resourceValues)
+    }
+
+    private func migrateLegacyCacheIfNeeded() {
+        guard let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return
+        }
+
+        let legacyRootURL = cachesURL.appendingPathComponent("PotatoCircleImages", isDirectory: true)
+        guard legacyRootURL.path != rootURL.path else { return }
+
+        migrateLegacyDirectory(from: legacyRootURL.appendingPathComponent(CacheKind.preview.directoryName, isDirectory: true), to: directoryURL(for: .preview))
+        migrateLegacyDirectory(from: legacyRootURL.appendingPathComponent(CacheKind.avatar.directoryName, isDirectory: true), to: directoryURL(for: .avatar))
+    }
+
+    private func migrateLegacyDirectory(from sourceURL: URL, to targetURL: URL) {
+        guard let files = try? fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) else {
+            return
+        }
+
+        createDirectoryIfNeeded(targetURL)
+        for sourceFileURL in files {
+            let targetFileURL = targetURL.appendingPathComponent(sourceFileURL.lastPathComponent, isDirectory: false)
+            guard !fileManager.fileExists(atPath: targetFileURL.path) else { continue }
+            try? fileManager.copyItem(at: sourceFileURL, to: targetFileURL)
+        }
+    }
+
+    private func touch(_ url: URL) {
+        try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    private func trimPreviewCacheIfNeeded() {
+        let directoryURL = directoryURL(for: .preview)
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let entries: [(url: URL, size: UInt64, date: Date)] = files.compactMap { url in
+            guard
+                let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                let size = values.fileSize,
+                let date = values.contentModificationDate
+            else {
+                return nil
+            }
+            return (url, UInt64(size), date)
+        }
+
+        var totalSize = entries.reduce(UInt64(0)) { $0 + $1.size }
+        guard totalSize > previewLimitBytes else { return }
+
+        for entry in entries.sorted(by: { $0.date < $1.date }) {
+            guard totalSize > previewTargetBytes else { break }
+            try? fileManager.removeItem(at: entry.url)
+            totalSize = totalSize > entry.size ? totalSize - entry.size : 0
         }
     }
 }
@@ -209,8 +605,25 @@ private struct CircleFeedAbstractArtwork: View {
 private struct CircleAvatarView: View {
     let username: String
     let avatarKey: String
+    let avatarUrl: URL?
 
     var body: some View {
+        ZStack {
+            placeholder
+
+            if let avatarUrl {
+                CircleCachedAvatarImage(cacheKey: avatarKey, url: avatarUrl)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .clipShape(Circle())
+    }
+
+    private var initial: String {
+        username.trimmingCharacters(in: .whitespacesAndNewlines).first.map { String($0) } ?? "土"
+    }
+
+    private var placeholder: some View {
         ZStack {
             Circle()
                 .fill(
@@ -225,11 +638,6 @@ private struct CircleAvatarView: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white)
         }
-        .frame(width: 20, height: 20)
-    }
-
-    private var initial: String {
-        username.trimmingCharacters(in: .whitespacesAndNewlines).first.map { String($0) } ?? "土"
     }
 }
 

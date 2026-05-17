@@ -11,9 +11,12 @@ struct CirclePostComposerView: View {
     @State private var tagsText = ""
     @State private var isPublishing = false
     @State private var imageLoadFailed = false
+    @State private var shouldUploadOriginal = false
     @FocusState private var focusedField: Field?
 
     let onPublish: (Data, String, [String]) -> Void
+    private let photoPreviewAspectRatio: CGFloat = 0.82
+    private let postUploadCompressionQuality: CGFloat = 0.82
 
     private enum Field: Hashable {
         case title
@@ -83,39 +86,52 @@ struct CirclePostComposerView: View {
     }
 
     private var photoPickerCard: some View {
-        PhotosPicker(selection: $selectedItem, matching: .images) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(photoFillColor)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(0.82, contentMode: .fit)
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = width / photoPreviewAspectRatio
 
-                if let selectedImage {
-                    Image(uiImage: selectedImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(0.82, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(alignment: .topTrailing) {
-                            changePhotoBadge
-                        }
-                } else {
-                    emptyPhotoContent
+            ZStack(alignment: .bottomLeading) {
+                PhotosPicker(selection: $selectedItem, matching: .images) {
+                    photoPreviewContent(width: width, height: height)
                 }
+                .buttonStyle(.plain)
+                .disabled(isPublishing)
+                .accessibilityLabel(selectedItem == nil ? "选择照片" : "重新选择照片")
+
+                originalUploadButton
             }
-            .overlay(alignment: .bottomLeading) {
-                photoBottomLabel
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(cardStrokeColor, lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(width: width, height: height)
         }
-        .buttonStyle(.plain)
-        .disabled(isPublishing)
-        .accessibilityLabel(selectedItem == nil ? "选择照片" : "重新选择照片")
+        .aspectRatio(photoPreviewAspectRatio, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func photoPreviewContent(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(photoFillColor)
+                .frame(width: width, height: height)
+
+            if let selectedImage {
+                Image(uiImage: selectedImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(alignment: .topTrailing) {
+                        changePhotoBadge
+                    }
+            } else {
+                emptyPhotoContent
+                    .frame(width: width, height: height)
+            }
+        }
+        .frame(width: width, height: height)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var emptyPhotoContent: some View {
@@ -142,7 +158,6 @@ struct CirclePostComposerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .aspectRatio(0.82, contentMode: .fit)
     }
 
     private var changePhotoBadge: some View {
@@ -155,18 +170,25 @@ struct CirclePostComposerView: View {
             .padding(10)
     }
 
-    private var photoBottomLabel: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "lock.display")
-                .font(.system(size: 12, weight: .semibold))
-            Text("圈子内不直接公开原图")
-                .font(.system(size: 12, weight: .semibold))
+    private var originalUploadButton: some View {
+        Button {
+            shouldUploadOriginal.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: shouldUploadOriginal ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("原图")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color.black.opacity(0.34), in: Capsule())
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color.black.opacity(0.34), in: Capsule())
+        .buttonStyle(.plain)
+        .disabled(isPublishing)
         .padding(12)
+        .accessibilityLabel(shouldUploadOriginal ? "已选择上传原图" : "已关闭原图上传")
     }
 
     private var infoCard: some View {
@@ -304,12 +326,22 @@ struct CirclePostComposerView: View {
                 isPublishing = false
                 return
             }
+            let uploadData = preparedUploadData(from: data)
             let tags = tagsText
                 .split(whereSeparator: { $0.isWhitespace || $0 == "," })
                 .map(String.init)
-            onPublish(data, title.trimmingCharacters(in: .whitespacesAndNewlines), tags)
+            onPublish(uploadData, title.trimmingCharacters(in: .whitespacesAndNewlines), tags)
             dismiss()
         }
+    }
+
+    private func preparedUploadData(from data: Data) -> Data {
+        guard !shouldUploadOriginal else { return data }
+        guard let image = UIImage(data: data),
+              let compressedData = image.jpegData(compressionQuality: postUploadCompressionQuality) else {
+            return data
+        }
+        return compressedData
     }
 
     private var backgroundColor: Color {
