@@ -10,6 +10,8 @@ struct SkillsHomeView: View {
     @StateObject private var aiStore = AISkillSettingsStore()
     @State private var activeSyncContext: WeatherSkillSyncContext?
     @State private var didHandleActiveSyncSuccess = false
+    @State private var showsWeatherSampleData = false
+    @State private var weatherSampleSnapshot = WeatherSkillMockData.snapshot()
 
     init(onAlbumTransferToDevice: @escaping (String) -> Void = { _ in }) {
         self.onAlbumTransferToDevice = onAlbumTransferToDevice
@@ -88,7 +90,7 @@ struct SkillsHomeView: View {
                             .font(.system(size: 19, weight: .semibold))
                             .foregroundStyle(primaryTextColor)
 
-                        Text(weatherStore.skill.previewSummary)
+                        Text(showsWeatherSampleData ? weatherSampleSnapshot.summaryText : weatherStore.skill.previewSummary)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(secondaryTextColor)
                             .lineLimit(1)
@@ -128,6 +130,11 @@ struct SkillsHomeView: View {
                     NavigationLink {
                         WeatherSkillDetailView(
                             store: weatherStore,
+                            sampleSnapshot: weatherSampleSnapshot,
+                            showsSampleData: $showsWeatherSampleData,
+                            onRefreshSampleData: {
+                                weatherSampleSnapshot = WeatherSkillMockData.snapshot()
+                            },
                             onSyncRequested: {
                                 startWeatherSync()
                             },
@@ -481,6 +488,12 @@ struct SkillsHomeView: View {
     }
 
     private var statusText: String {
+        if showsWeatherSampleData {
+            if let syncText = syncTimeText {
+                return "示例数据预览 · 上次同步 \(syncText)"
+            }
+            return "示例数据预览"
+        }
         if let syncText = syncTimeText {
             return "\(weatherStore.loadState.message) · 上次同步 \(syncText)"
         }
@@ -488,6 +501,9 @@ struct SkillsHomeView: View {
     }
 
     private var statusColor: Color {
+        if showsWeatherSampleData {
+            return secondaryTextColor
+        }
         if case .failed = weatherStore.loadState {
             return .red
         }
@@ -503,6 +519,9 @@ struct SkillsHomeView: View {
     }
 
     private var weatherLocationLabel: String {
+        if showsWeatherSampleData {
+            return weatherSampleSnapshot.location.name
+        }
         switch weatherStore.config.cityMode {
         case .automatic:
             return weatherStore.snapshot?.location.name ?? "当前位置"
@@ -511,8 +530,12 @@ struct SkillsHomeView: View {
         }
     }
 
+    private var activeWeatherSnapshot: WeatherSkillSnapshot? {
+        showsWeatherSampleData ? weatherSampleSnapshot : weatherStore.snapshot
+    }
+
     private var previewImage: UIImage? {
-        guard let snapshot = weatherStore.snapshot else { return nil }
+        guard let snapshot = activeWeatherSnapshot else { return nil }
         let targetSize = CGSize(width: 400, height: 600)
         return WeatherSkillRenderer.renderDisplayImage(
             snapshot: snapshot,
@@ -522,7 +545,7 @@ struct SkillsHomeView: View {
     }
 
     private func makeSyncContext() -> WeatherSkillSyncContext? {
-        guard let snapshot = weatherStore.snapshot else { return nil }
+        guard let snapshot = activeWeatherSnapshot else { return nil }
         guard let device = selectedTargetDevice ?? activeDevice else { return nil }
 
         let prepared = WeatherSkillPushCoordinator.shared.preparePush(
@@ -549,7 +572,7 @@ struct SkillsHomeView: View {
     static let weatherSyncSource = "weather"
 
     private var canStartWeatherSync: Bool {
-        weatherStore.snapshot != nil && (selectedTargetDevice ?? activeDevice) != nil
+        activeWeatherSnapshot != nil && (selectedTargetDevice ?? activeDevice) != nil
     }
 
     @ViewBuilder
@@ -588,7 +611,7 @@ struct SkillsHomeView: View {
         // 没有 credentials / 关闭技能 时 refreshWeather 自身会直接 return，
         // 这里就走原来的 snapshot 分支（要么不构造 context，要么用最近一次成功的 snapshot）。
         Task {
-            if weatherStore.config.hasCredentials, weatherStore.config.isEnabled {
+            if !showsWeatherSampleData, weatherStore.config.hasCredentials, weatherStore.config.isEnabled {
                 await weatherStore.refreshWeather()
             }
             await MainActor.run {
@@ -758,6 +781,9 @@ private enum WeatherCredentialKind: String {
 
 private struct WeatherSkillDetailView: View {
     @ObservedObject var store: WeatherSkillStore
+    let sampleSnapshot: WeatherSkillSnapshot
+    @Binding var showsSampleData: Bool
+    let onRefreshSampleData: () -> Void
     let onSyncRequested: () -> Void
     let isSyncing: Bool
     let syncProgress: Double
@@ -791,15 +817,33 @@ private struct WeatherSkillDetailView: View {
                 .frame(height: 260)
 
             HStack {
-                Text(store.snapshot?.summaryText ?? "等待天气数据")
+                Text(activeSnapshot?.summaryText ?? "等待天气数据")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(primaryTextColor)
 
                 Spacer()
 
-                Text(store.loadState.message)
+                Text(showsSampleData ? "示例数据" : store.loadState.message)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(secondaryTextColor)
+            }
+
+            HStack(spacing: 10) {
+                Text("400 x 600 墨水屏预览")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    showsSampleData.toggle()
+                } label: {
+                    Text(showsSampleData ? "示例数据 开" : "示例数据 关")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(showsSampleData ? Color.accentColor : Color.gray, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(18)
@@ -940,17 +984,21 @@ private struct WeatherSkillDetailView: View {
             .disabled(previewImage == nil || selectedDevice == nil || isSyncing)
 
             Button {
-                Task {
-                    await store.refreshWeather()
+                if showsSampleData {
+                    onRefreshSampleData()
+                } else {
+                    Task {
+                        await store.refreshWeather()
+                    }
                 }
             } label: {
-                Label("刷新天气", systemImage: "arrow.clockwise")
+                Label(showsSampleData ? "刷新示例" : "刷新天气", systemImage: "arrow.clockwise")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
             }
             .buttonStyle(.bordered)
-            .disabled(isWeatherRefreshing)
+            .disabled(!showsSampleData && isWeatherRefreshing)
         }
     }
 
@@ -1091,8 +1139,12 @@ private struct WeatherSkillDetailView: View {
             .padding(.leading, 16)
     }
 
+    private var activeSnapshot: WeatherSkillSnapshot? {
+        showsSampleData ? sampleSnapshot : store.snapshot
+    }
+
     private var previewImage: UIImage? {
-        guard let snapshot = store.snapshot else { return nil }
+        guard let snapshot = activeSnapshot else { return nil }
         let targetSize = CGSize(width: 400, height: 600)
         return WeatherSkillRenderer.renderDisplayImage(
             snapshot: snapshot,

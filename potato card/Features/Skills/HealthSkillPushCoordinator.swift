@@ -76,6 +76,45 @@ final class HealthSkillPushCoordinator {
         )
     }
 
+    func pushSnapshot(
+        _ snapshot: HealthSnapshot,
+        using store: HealthSkillStore,
+        waitForFinalResult: Bool
+    ) async throws -> String {
+        guard store.config.isEnabled else {
+            logger.error("健康推送终止：技能已关闭。")
+            throw HealthPushError.skillDisabled
+        }
+
+        let targetDeviceSnapshot = try resolveTargetDeviceSnapshot(using: store)
+        logger.info("已解析目标设备：id=\(targetDeviceSnapshot.id, privacy: .public), size=\(targetDeviceSnapshot.pixelWidth, privacy: .public)x\(targetDeviceSnapshot.pixelHeight, privacy: .public)")
+
+        let prepared = preparePush(
+            snapshot: snapshot,
+            configuration: store.config,
+            targetDeviceSnapshot: targetDeviceSnapshot
+        )
+        logger.info("健康看板渲染完成，开始推送。")
+
+        let device = try await bleService.pushWeatherImage(
+            prepared.transferImage,
+            displayImage: prepared.displayImage,
+            toTargetDeviceSnapshot: prepared.targetDeviceSnapshot,
+            algorithm: store.config.imageAlgorithm,
+            returnAfterTransferStarted: !waitForFinalResult
+        )
+        logger.info("健康看板推送已开始：\(device.name, privacy: .public)")
+
+        store.updateTargetDevice(device)
+        store.markSynced(mode: snapshot.mode)
+
+        if waitForFinalResult {
+            bleService.markLastTransferredImage(prepared.displayImage, for: device.id)
+            return "已推送\(snapshot.mode.title)到\(device.name)"
+        }
+        return "已开始把\(snapshot.mode.title)推送到\(device.name)，后台会继续传输。"
+    }
+
     func pushHealthDashboard(mode: HealthDashboardMode, waitForFinalResult: Bool) async throws -> String {
         let store = HealthSkillStore()
         logger.info("开始准备健康推送 mode=\(mode.rawValue, privacy: .public) enabled=\(store.config.isEnabled, privacy: .public)")
@@ -84,9 +123,6 @@ final class HealthSkillPushCoordinator {
             logger.error("健康推送终止：技能已关闭。")
             throw HealthPushError.skillDisabled
         }
-
-        let targetDeviceSnapshot = try resolveTargetDeviceSnapshot(using: store)
-        logger.info("已解析目标设备：id=\(targetDeviceSnapshot.id, privacy: .public), size=\(targetDeviceSnapshot.pixelWidth, privacy: .public)x\(targetDeviceSnapshot.pixelHeight, privacy: .public)")
 
         // 健康数据：快捷指令场景下我们先请求一次合集授权，再抓取目标模式数据。
         let service = HealthDataService.shared
@@ -112,30 +148,7 @@ final class HealthSkillPushCoordinator {
             throw HealthPushError.dataUnavailable(healthError.localizedDescription)
         }
 
-        let prepared = preparePush(
-            snapshot: snapshot,
-            configuration: store.config,
-            targetDeviceSnapshot: targetDeviceSnapshot
-        )
-        logger.info("健康看板渲染完成，开始推送。")
-
-        let device = try await bleService.pushWeatherImage(
-            prepared.transferImage,
-            displayImage: prepared.displayImage,
-            toTargetDeviceSnapshot: prepared.targetDeviceSnapshot,
-            algorithm: store.config.imageAlgorithm,
-            returnAfterTransferStarted: !waitForFinalResult
-        )
-        logger.info("健康看板推送已开始：\(device.name, privacy: .public)")
-
-        store.updateTargetDevice(device)
-        store.markSynced(mode: mode)
-
-        if waitForFinalResult {
-            bleService.markLastTransferredImage(prepared.displayImage, for: device.id)
-            return "已推送\(mode.title)到\(device.name)"
-        }
-        return "已开始把\(mode.title)推送到\(device.name)，后台会继续传输。"
+        return try await pushSnapshot(snapshot, using: store, waitForFinalResult: waitForFinalResult)
     }
 
     private func resolveTargetDeviceSnapshot(using store: HealthSkillStore) throws -> WeatherTargetDeviceSnapshot {

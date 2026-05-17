@@ -500,11 +500,21 @@ struct HealthSkillDetailView: View {
         bleService.beginSync(source: HealthSkillSectionView.syncSource)
         defer { bleService.endSync(source: HealthSkillSectionView.syncSource) }
         do {
-            let message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
-                mode: store.config.defaultMode,
-                waitForFinalResult: false
-            )
-            statusMessage = message
+            if showsSampleData {
+                let snapshot = HealthSkillMockData.snapshot(for: store.config.defaultMode)
+                let message = try await HealthSkillPushCoordinator.shared.pushSnapshot(
+                    snapshot,
+                    using: store,
+                    waitForFinalResult: false
+                )
+                statusMessage = "\(message)（示例数据）"
+            } else {
+                let message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
+                    mode: store.config.defaultMode,
+                    waitForFinalResult: false
+                )
+                statusMessage = message
+            }
         } catch {
             if let localized = error as? LocalizedError, let description = localized.errorDescription, !description.isEmpty {
                 statusMessage = description
