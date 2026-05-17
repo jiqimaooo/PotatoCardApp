@@ -386,6 +386,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
@@ -437,6 +438,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);

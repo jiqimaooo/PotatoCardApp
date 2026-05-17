@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class CircleSessionStore: ObservableObject {
+    static let didSignOutNotification = Notification.Name("CircleSessionStoreDidSignOut")
+
     @Published private(set) var profile: CircleUserProfile?
 
     private enum Keys {
@@ -44,7 +46,10 @@ final class CircleSessionStore: ObservableObject {
         let userID = defaults.string(forKey: Keys.userID) ?? ""
         let username = defaults.string(forKey: Keys.username) ?? ""
         let avatarKey = defaults.string(forKey: Keys.avatarKey) ?? ""
-        guard !userID.isEmpty, !username.isEmpty, !avatarKey.isEmpty else { return }
+        guard !userID.isEmpty, !username.isEmpty, !avatarKey.isEmpty, token != nil, refreshToken != nil else {
+            profile = nil
+            return
+        }
         profile = CircleUserProfile(id: userID, username: username, avatarKey: avatarKey)
     }
 
@@ -68,6 +73,7 @@ final class CircleSessionStore: ObservableObject {
         defaults.removeObject(forKey: Keys.username)
         defaults.removeObject(forKey: Keys.avatarKey)
         profile = nil
+        NotificationCenter.default.post(name: Self.didSignOutNotification, object: nil)
     }
 
     private func accessTokenExpiryDate(_ token: String) -> Date? {

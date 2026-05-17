@@ -12,10 +12,11 @@ struct CircleRegistrationView: View {
     @State private var avatarData: Data?
     @State private var username = ""
     @State private var password = ""
-    @State private var errorMessage: String?
     @State private var isRegistering = false
     @State private var selectedLegalDocument: CircleLegalDocument?
     @State private var authMode: CirclePasswordAuthMode = .register
+    @State private var toastMessage: CircleToastMessage?
+    @State private var toastDismissTask: Task<Void, Never>?
     @FocusState private var usernameFocused: Bool
     @FocusState private var passwordFocused: Bool
 
@@ -25,22 +26,32 @@ struct CircleRegistrationView: View {
     private let hairline = Color.black.opacity(0.08)
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                heroSection
-                if authMode == .register {
-                    stepperSection
+        ZStack(alignment: .bottom) {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    heroSection
+                    if authMode == .register {
+                        stepperSection
+                    }
+                    formSection
+                    passwordExplainer
+                    actionSection
                 }
-                formSection
-                passwordExplainer
-                actionSection
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 28)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 28)
+
+            if let toastMessage {
+                CircleToastView(message: toastMessage)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(Color.white.ignoresSafeArea())
         .scrollDismissesKeyboard(.interactively)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: toastMessage)
         .task(id: selectedAvatarItem) {
             avatarData = try? await selectedAvatarItem?.loadTransferable(type: Data.self)
         }
@@ -58,7 +69,7 @@ struct CircleRegistrationView: View {
                     .minimumScaleFactor(0.82)
                     .accessibilityAddTraits(.isHeader)
 
-                Text(authMode == .register ? "先绑定你的土豆片，再设置临时登录密码。圈子里只展示用户名和头像，不公开设备标识。" : "使用用户名和密码登录圈子。后续开通开发者能力后会切回通行密钥。")
+                Text(authMode == .register ? "先识别附近的土豆片，再设置临时登录密码。圈子里只展示用户名和头像，不公开设备标识。" : "使用用户名和密码登录圈子。后续开通开发者能力后会切回通行密钥。")
                     .font(.system(size: 14, weight: .semibold))
                     .lineSpacing(2)
                     .foregroundStyle(.secondary)
@@ -78,7 +89,7 @@ struct CircleRegistrationView: View {
 
     private var stepperSection: some View {
         HStack(spacing: 0) {
-            CircleRegistrationStep(number: 1, title: "绑定设备", isCompleted: activeDevice != nil, isActive: false)
+            CircleRegistrationStep(number: 1, title: "识别设备", isCompleted: activeDevice != nil, isActive: false)
 
             Rectangle()
                 .fill(Color.black.opacity(0.1))
@@ -133,17 +144,17 @@ struct CircleRegistrationView: View {
 
     private var deviceCard: some View {
         HStack(spacing: 12) {
-            Image(systemName: activeDevice == nil ? "iphone.slash" : "checkmark.circle.fill")
+            Image(systemName: activeDevice == nil ? "iphone.radiowaves.left.and.right" : "checkmark.circle.fill")
                 .font(.system(size: activeDevice == nil ? 22 : 32, weight: .semibold))
                 .foregroundStyle(activeDevice == nil ? .secondary : circleGreen)
                 .frame(width: 48, height: 50)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(activeDevice == nil ? "请先连接设备" : "设备已连接")
+                Text(activeDevice == nil ? "等待扫描设备" : "设备已识别")
                     .font(.system(size: activeDevice == nil ? 14 : 17, weight: .bold))
                     .foregroundStyle(activeDevice == nil ? .secondary : ink)
 
-                Text(activeDevice?.name ?? "前往设备页连接土豆片硬件")
+                Text(activeDevice?.name ?? "打开土豆片并保持在附近，设备页扫描到后即可注册")
                     .font(.system(size: 16, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -380,14 +391,6 @@ struct CircleRegistrationView: View {
             .buttonStyle(.plain)
             .disabled(isRegistering)
 
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-            }
-
             HStack(alignment: .center, spacing: 7) {
                 Image(systemName: "shield")
                     .font(.system(size: 14, weight: .medium))
@@ -448,7 +451,7 @@ struct CircleRegistrationView: View {
     }
 
     private var activeDevice: BleDevice? {
-        bleService.connectedDevice
+        bleService.connectedDevice ?? bleService.selectedDevice ?? bleService.devices.first
     }
 
     private var avatarImage: UIImage? {
@@ -478,7 +481,7 @@ struct CircleRegistrationView: View {
     }
 
     private var registrationDisabledReason: String {
-        if authMode == .register && activeDevice == nil { return "请先连接土豆片硬件" }
+        if authMode == .register && activeDevice == nil { return "请先扫描到土豆片硬件" }
         if authMode == .register && avatarData == nil { return "请先选择头像" }
         if !isUsernameValid { return "请输入 2 到 20 个字符的用户名" }
         if !isPasswordValid { return "请输入至少 6 个字符的密码" }
@@ -509,7 +512,7 @@ struct CircleRegistrationView: View {
         guard let activeDevice, isUsernameValid, isPasswordValid, avatarData != nil else { return }
 
         isRegistering = true
-        errorMessage = nil
+        toastMessage = nil
         usernameFocused = false
         passwordFocused = false
         Task {
@@ -522,7 +525,7 @@ struct CircleRegistrationView: View {
                 )
                 sessionStore.saveSession(session)
             } catch {
-                errorMessage = error.localizedDescription
+                showToast(error.localizedDescription, style: .error)
             }
             isRegistering = false
         }
@@ -532,7 +535,7 @@ struct CircleRegistrationView: View {
         guard isUsernameValid, isPasswordValid else { return }
 
         isRegistering = true
-        errorMessage = nil
+        toastMessage = nil
         usernameFocused = false
         passwordFocused = false
         Task {
@@ -543,17 +546,34 @@ struct CircleRegistrationView: View {
                 )
                 sessionStore.saveSession(session)
             } catch {
-                errorMessage = error.localizedDescription
+                showToast(error.localizedDescription, style: .error)
             }
             isRegistering = false
         }
     }
 
     private func switchAuthMode() {
-        errorMessage = nil
+        toastMessage = nil
         usernameFocused = false
         passwordFocused = false
         authMode = authMode == .register ? .login : .register
+    }
+
+    private func showToast(_ message: String, style: CircleToastMessage.Style) {
+        toastDismissTask?.cancel()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            toastMessage = CircleToastMessage(text: message, style: style)
+        }
+
+        toastDismissTask = Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    toastMessage = nil
+                }
+            }
+        }
     }
 }
 

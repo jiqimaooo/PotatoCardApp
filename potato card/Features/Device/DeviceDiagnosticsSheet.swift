@@ -4,6 +4,7 @@ struct DeviceDiagnosticsSheet: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @StateObject private var circleSessionStore = CircleSessionStore()
 
     var body: some View {
         NavigationStack {
@@ -12,6 +13,7 @@ struct DeviceDiagnosticsSheet: View {
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 16) {
+                        circleAccountCard
                         deviceSummaryCard
                         backgroundShortcutCard
                         logCard
@@ -23,6 +25,9 @@ struct DeviceDiagnosticsSheet: View {
             }
             .navigationTitle("设备诊断")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                circleSessionStore.loadFromStorage()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("关闭") {
@@ -31,6 +36,48 @@ struct DeviceDiagnosticsSheet: View {
                 }
             }
         }
+    }
+
+    private var circleAccountCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "person.2.circle.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(accentColor)
+                    .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("圈子账号")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(primaryTextColor)
+
+                    Text(circleSessionStore.profile?.username ?? "当前未登录")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(secondaryTextColor)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+            }
+
+            Button(role: .destructive) {
+                circleSessionStore.signOut()
+            } label: {
+                HStack {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                    Text("退出圈子登录")
+                    Spacer()
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .disabled(!circleSessionStore.isRegistered)
+        }
+        .padding(18)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(cardStroke)
     }
 
     private var deviceSummaryCard: some View {
