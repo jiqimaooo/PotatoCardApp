@@ -376,3 +376,254 @@ struct CirclePostComposerView: View {
         Color(red: 0.86, green: 0.16, blue: 0.22)
     }
 }
+
+struct CircleDriftBottleThrowComposerView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedImageData: Data?
+    @State private var imageLoadFailed = false
+    @State private var isSending = false
+    @State private var isThrowing = false
+    @State private var isPlaneLaunched = false
+
+    let onThrow: (Data) -> Void
+
+    private let photoPreviewAspectRatio: CGFloat = 0.82
+    private let uploadCompressionQuality: CGFloat = 0.82
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                backgroundColor.ignoresSafeArea()
+
+                VStack(spacing: 18) {
+                    Spacer(minLength: 12)
+
+                    photoPickerCard
+                        .padding(.horizontal, 18)
+
+                    Spacer(minLength: 18)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") {
+                        dismiss()
+                    }
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(primaryTextColor)
+                    .disabled(isSending)
+                }
+
+                ToolbarItem(placement: .principal) {
+                    Text("扔一个")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(primaryTextColor)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: send) {
+                        Text("发送")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(isSendDisabled ? secondaryTextColor : driftTint)
+                    }
+                    .disabled(isSendDisabled)
+                }
+            }
+        }
+        .task(id: selectedItem) {
+            await loadSelectedImageData()
+        }
+    }
+
+    private var photoPickerCard: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = width / photoPreviewAspectRatio
+
+            ZStack {
+                PhotosPicker(selection: $selectedItem, matching: .images) {
+                    photoPreviewContent(width: width, height: height)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSending)
+
+                if isThrowing {
+                    thrownPlane
+                        .transition(.scale(scale: 0.76).combined(with: .opacity))
+                }
+            }
+            .frame(width: width, height: height)
+        }
+        .aspectRatio(photoPreviewAspectRatio, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func photoPreviewContent(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(photoFillColor)
+                .frame(width: width, height: height)
+
+            if let selectedImage {
+                Image(uiImage: selectedImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .scaleEffect(isThrowing ? 0.22 : 1)
+                    .rotationEffect(.degrees(isThrowing ? 22 : 0))
+                    .offset(x: isThrowing ? width * 0.36 : 0, y: isThrowing ? -height * 0.48 : 0)
+                    .opacity(isThrowing ? 0 : 1)
+                    .animation(.spring(response: 0.58, dampingFraction: 0.82), value: isThrowing)
+                    .overlay(alignment: .topTrailing) {
+                        if !isThrowing {
+                            changePhotoBadge
+                        }
+                    }
+            } else {
+                emptyPhotoContent
+                    .frame(width: width, height: height)
+            }
+        }
+        .frame(width: width, height: height)
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var emptyPhotoContent: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(driftTint.opacity(0.11))
+                    .frame(width: 74, height: 74)
+
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(driftTint)
+            }
+
+            Text(imageLoadFailed ? "读取失败，请重新选择" : "选择照片")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(imageLoadFailed ? .red : primaryTextColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private var changePhotoBadge: some View {
+        Label("更换", systemImage: "arrow.triangle.2.circlepath")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(primaryTextColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.regularMaterial, in: Capsule())
+            .padding(10)
+    }
+
+    private var thrownPlane: some View {
+        Image(systemName: "paperplane.fill")
+            .font(.system(size: 36, weight: .bold))
+            .foregroundStyle(driftTint)
+            .shadow(color: driftTint.opacity(0.28), radius: 18, x: 0, y: 8)
+            .offset(x: isPlaneLaunched ? 112 : -18, y: isPlaneLaunched ? -164 : 40)
+            .rotationEffect(.degrees(isPlaneLaunched ? 16 : -18))
+            .scaleEffect(isPlaneLaunched ? 0.76 : 1)
+            .opacity(isPlaneLaunched ? 0 : 1)
+            .animation(.spring(response: 0.56, dampingFraction: 0.78), value: isPlaneLaunched)
+    }
+
+    private var selectedImage: UIImage? {
+        guard let selectedImageData else { return nil }
+        return UIImage(data: selectedImageData)
+    }
+
+    private var isSendDisabled: Bool {
+        selectedItem == nil || selectedImageData == nil || isSending
+    }
+
+    private func loadSelectedImageData() async {
+        guard let selectedItem else {
+            selectedImageData = nil
+            imageLoadFailed = false
+            return
+        }
+        imageLoadFailed = false
+        do {
+            selectedImageData = try await selectedItem.loadTransferable(type: Data.self)
+            imageLoadFailed = selectedImageData == nil
+        } catch {
+            selectedImageData = nil
+            imageLoadFailed = true
+        }
+    }
+
+    private func send() {
+        guard !isSendDisabled else { return }
+        isSending = true
+
+        Task {
+            let data: Data?
+            if let selectedImageData {
+                data = selectedImageData
+            } else {
+                data = try? await selectedItem?.loadTransferable(type: Data.self)
+            }
+
+            guard let data else {
+                imageLoadFailed = true
+                isSending = false
+                return
+            }
+
+            let uploadData = preparedUploadData(from: data)
+            isPlaneLaunched = false
+            withAnimation(.easeOut(duration: 0.12)) {
+                isThrowing = true
+            }
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            withAnimation(.spring(response: 0.56, dampingFraction: 0.78)) {
+                isPlaneLaunched = true
+            }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            onThrow(uploadData)
+            dismiss()
+        }
+    }
+
+    private func preparedUploadData(from data: Data) -> Data {
+        guard let image = UIImage(data: data),
+              let compressedData = image.jpegData(compressionQuality: uploadCompressionQuality) else {
+            return data
+        }
+        return compressedData
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color(red: 0.06, green: 0.06, blue: 0.07) : Color(red: 0.97, green: 0.97, blue: 0.96)
+    }
+
+    private var photoFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.035)
+    }
+
+    private var cardStrokeColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.055)
+    }
+
+    private var primaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.88)
+    }
+
+    private var secondaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.46) : Color.black.opacity(0.38)
+    }
+
+    private var driftTint: Color {
+        Color(red: 0.08, green: 0.48, blue: 0.86)
+    }
+}

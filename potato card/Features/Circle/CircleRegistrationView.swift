@@ -4,6 +4,7 @@ import UIKit
 import WebKit
 
 struct CircleRegistrationView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var bleService: BleTransferService
     @ObservedObject var sessionStore: CircleSessionStore
     let apiClient: CircleAPIClient
@@ -21,9 +22,6 @@ struct CircleRegistrationView: View {
     @FocusState private var passwordFocused: Bool
 
     private let circleGreen = Color(red: 0.23, green: 0.68, blue: 0.28)
-    private let softGreen = Color(red: 0.91, green: 0.97, blue: 0.91)
-    private let ink = Color(red: 0.06, green: 0.07, blue: 0.08)
-    private let hairline = Color.black.opacity(0.08)
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -49,7 +47,7 @@ struct CircleRegistrationView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .background(Color.white.ignoresSafeArea())
+        .background(backgroundColor.ignoresSafeArea())
         .scrollDismissesKeyboard(.interactively)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: toastMessage)
         .task(id: selectedAvatarItem) {
@@ -92,14 +90,14 @@ struct CircleRegistrationView: View {
             CircleRegistrationStep(number: 1, title: "识别设备", isCompleted: activeDevice != nil, isActive: false)
 
             Rectangle()
-                .fill(Color.black.opacity(0.1))
+                .fill(stepConnectorColor)
                 .frame(height: 1)
                 .padding(.horizontal, 6)
 
             CircleRegistrationStep(number: 2, title: "创建密钥", isCompleted: false, isActive: true)
 
             Rectangle()
-                .fill(Color.black.opacity(0.1))
+                .fill(stepConnectorColor)
                 .frame(height: 1)
                 .padding(.horizontal, 6)
 
@@ -117,25 +115,25 @@ struct CircleRegistrationView: View {
                 deviceCard
 
                 Divider()
-                    .overlay(Color.black.opacity(0.06))
+                    .overlay(dividerColor)
                     .padding(.leading, 64)
 
                 avatarPicker
 
                 Divider()
-                    .overlay(Color.black.opacity(0.06))
+                    .overlay(dividerColor)
                     .padding(.leading, 64)
             }
 
             usernameField
 
             Divider()
-                .overlay(Color.black.opacity(0.06))
+                .overlay(dividerColor)
                 .padding(.leading, 64)
 
             passwordField
         }
-        .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(hairline, lineWidth: 1)
@@ -202,7 +200,7 @@ struct CircleRegistrationView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.28))
+                    .foregroundStyle(tertiaryTextColor)
                     .frame(width: 20, height: 44)
             }
             .padding(.horizontal, 18)
@@ -217,7 +215,7 @@ struct CircleRegistrationView: View {
     private var avatarPreview: some View {
         ZStack {
             Circle()
-                .fill(avatarData == nil ? softGreen : Color.white)
+                .fill(avatarData == nil ? softGreen : cardFillColor)
                 .frame(width: 46, height: 46)
 
             if let avatarImage {
@@ -327,7 +325,7 @@ struct CircleRegistrationView: View {
     private var passwordExplainer: some View {
         VStack(spacing: 0) {
             Divider()
-                .overlay(Color.black.opacity(0.06))
+                .overlay(dividerColor)
 
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: "lock.fill")
@@ -582,6 +580,38 @@ struct CircleRegistrationView: View {
         guard let image = UIImage(data: avatarData) else { return avatarData }
         return image.jpegData(compressionQuality: 0.82)
     }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color(red: 0.04, green: 0.05, blue: 0.05) : .white
+    }
+
+    private var cardFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : .white
+    }
+
+    private var softGreen: Color {
+        colorScheme == .dark ? circleGreen.opacity(0.18) : Color(red: 0.91, green: 0.97, blue: 0.91)
+    }
+
+    private var ink: Color {
+        colorScheme == .dark ? Color.white.opacity(0.92) : Color(red: 0.06, green: 0.07, blue: 0.08)
+    }
+
+    private var tertiaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.34) : Color.black.opacity(0.28)
+    }
+
+    private var hairline: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+    }
+
+    private var dividerColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)
+    }
+
+    private var stepConnectorColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.10)
+    }
 }
 
 private enum CircleLegalDocument: Identifiable {
@@ -658,12 +688,14 @@ private struct CircleWebView: UIViewRepresentable {
 }
 
 private struct CirclePotatoHeroIllustration: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     private let green = Color(red: 0.23, green: 0.68, blue: 0.28)
 
     var body: some View {
         ZStack {
             Ellipse()
-                .fill(Color(red: 0.90, green: 0.96, blue: 0.90))
+                .fill(heroHaloColor)
                 .frame(width: 74, height: 64)
                 .rotationEffect(.degrees(-18))
                 .offset(x: 3, y: 4)
@@ -688,16 +720,16 @@ private struct CirclePotatoHeroIllustration: View {
                 )
                 .frame(width: 41, height: 54)
                 .rotationEffect(.degrees(5))
-                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 5)
+                .shadow(color: potatoShadowColor, radius: 8, x: 0, y: 5)
 
             HStack(spacing: 11) {
-                Circle().fill(Color.black.opacity(0.72)).frame(width: 4, height: 4)
-                Circle().fill(Color.black.opacity(0.72)).frame(width: 4, height: 4)
+                Circle().fill(faceColor).frame(width: 4, height: 4)
+                Circle().fill(faceColor).frame(width: 4, height: 4)
             }
             .offset(x: -3, y: -3)
 
             Capsule()
-                .stroke(Color.black.opacity(0.62), lineWidth: 2)
+                .stroke(faceColor.opacity(0.86), lineWidth: 2)
                 .frame(width: 10, height: 5)
                 .mask(Rectangle().offset(y: 4))
                 .offset(x: -3, y: 6)
@@ -709,6 +741,18 @@ private struct CirclePotatoHeroIllustration: View {
                 .offset(x: 23, y: 18)
                 .shadow(color: green.opacity(0.16), radius: 5, x: 0, y: 3)
         }
+    }
+
+    private var heroHaloColor: Color {
+        colorScheme == .dark ? green.opacity(0.18) : Color(red: 0.90, green: 0.96, blue: 0.90)
+    }
+
+    private var potatoShadowColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.28) : Color.black.opacity(0.06)
+    }
+
+    private var faceColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.78) : Color.black.opacity(0.72)
     }
 }
 
@@ -724,7 +768,7 @@ private struct CircleRegistrationStep: View {
         VStack(spacing: 5) {
             ZStack {
                 Circle()
-                    .fill(isCompleted ? green : .white)
+                    .fill(isCompleted ? green : Color(.secondarySystemGroupedBackground))
                     .frame(width: 28, height: 28)
                     .overlay {
                         Circle()
@@ -744,7 +788,7 @@ private struct CircleRegistrationStep: View {
 
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isActive || isCompleted ? Color(red: 0.06, green: 0.07, blue: 0.08) : .secondary)
+                .foregroundStyle(isActive || isCompleted ? Color.primary.opacity(0.9) : .secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
@@ -754,7 +798,7 @@ private struct CircleRegistrationStep: View {
     private var stepStrokeColor: Color {
         if isCompleted { return green }
         if isActive { return green }
-        return Color.black.opacity(0.18)
+        return Color.primary.opacity(0.18)
     }
 }
 

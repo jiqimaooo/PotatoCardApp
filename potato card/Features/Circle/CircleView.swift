@@ -1,12 +1,14 @@
 import SwiftUI
+import UIKit
 
 struct CircleView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @StateObject private var sessionStore = CircleSessionStore()
-    @StateObject private var transferCoordinator: CircleTransferCoordinator
     @State private var posts: [CirclePost] = []
     @State private var isComposerPresented = false
+    @State private var isDriftBottleThrowPresented = false
     @State private var isLoadingPosts = false
+    @State private var hasCompletedInitialPostsLoad = false
     @State private var transferStatusVisibilityTask: Task<Void, Never>?
     @State private var isTransferStatusVisible = false
     @State private var toastMessage: CircleToastMessage?
@@ -14,8 +16,33 @@ struct CircleView: View {
     @State private var publishStatusVisibilityTask: Task<Void, Never>?
     @State private var publishStatusState: CirclePublishStatusToast.StateStyle = .posting
     @State private var isPublishStatusVisible = false
+    @State private var selectedFeedSection: FeedSection = .discover
+    @State private var isHeaderHidden = false
+    @State private var lastFeedScrollOffset: CGFloat = 0
+    @State private var circleImageViewerRequest: CircleImageViewerRequest?
+    @State private var isPreparingTransferSheet = false
 
     private let apiClient: CircleAPIClient
+
+    private enum FeedSection: CaseIterable, Hashable {
+        case discover
+        case following
+        case latest
+        case driftBottle
+
+        var title: String {
+            switch self {
+            case .discover:
+                return "发现"
+            case .following:
+                return "关注"
+            case .latest:
+                return "最新"
+            case .driftBottle:
+                return "漂流瓶"
+            }
+        }
+    }
 
     private var sessionAPIClient: CircleAPIClient {
         var client = apiClient
@@ -25,7 +52,6 @@ struct CircleView: View {
 
     init(apiClient: CircleAPIClient = CircleView.defaultAPIClient()) {
         self.apiClient = apiClient
-        _transferCoordinator = StateObject(wrappedValue: CircleTransferCoordinator(apiClient: apiClient))
     }
 
     var body: some View {
@@ -33,26 +59,16 @@ struct CircleView: View {
             if sessionStore.isRegistered {
                 ZStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 0) {
-                        header
-                        if showsFullPageLoading {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            ZStack(alignment: .top) {
-                                CircleFeedView(
-                                    posts: posts,
-                                    onTransfer: handleTransfer,
-                                    onReport: handleReport,
-                                    onRefresh: refreshPosts
-                                )
-
-                                if isLoadingPosts {
-                                    CircleFeedTopLoadingView()
-                                        .padding(.top, 8)
-                                        .transition(.move(edge: .top).combined(with: .opacity))
-                                }
-                            }
+                        if !isHeaderHidden {
+                            header
+                                .transition(.move(edge: .top).combined(with: .opacity))
                         }
+                        feedContent
+                    }
+
+                    if shouldShowBottomPublishButton {
+                        bottomPublishButton
+                            .transition(.scale(scale: 0.92).combined(with: .opacity))
                     }
 
                     VStack(spacing: 10) {
@@ -82,6 +98,7 @@ struct CircleView: View {
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isTransferStatusVisible)
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: toastMessage)
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isPublishStatusVisible)
+                .animation(.spring(response: 0.30, dampingFraction: 0.88), value: isHeaderHidden)
                 .animation(.easeInOut(duration: 0.18), value: isLoadingPosts)
             } else {
                 CircleRegistrationView(sessionStore: sessionStore, apiClient: apiClient)
@@ -100,17 +117,14 @@ struct CircleView: View {
             toastMessage = nil
             isPublishStatusVisible = false
             isComposerPresented = false
+            isDriftBottleThrowPresented = false
+            hasCompletedInitialPostsLoad = false
+            selectedFeedSection = .discover
+            resetFeedHeaderVisibility()
             sessionStore.loadFromStorage()
-        }
-        .onChange(of: transferCoordinator.isPreparingTransfer) { isPreparing in
-            if isPreparing { showTransferStatus() }
         }
         .onChange(of: bleService.transferPhase) { phase in
             handleTransferPhaseChange(phase)
-        }
-        .onChange(of: transferCoordinator.errorMessage) { message in
-            guard let message, !message.isEmpty else { return }
-            showToast(message, style: .error)
         }
         .onChange(of: bleService.errorMessage) { message in
             guard let message, !message.isEmpty else { return }
@@ -121,28 +135,40 @@ struct CircleView: View {
                 publish(imageData: imageData, title: title, tags: tags)
             }
         }
+        .sheet(isPresented: $isDriftBottleThrowPresented) {
+            CircleDriftBottleThrowComposerView { imageData in
+                publishDriftBottle(imageData: imageData)
+            }
+        }
+        .sheet(item: $circleImageViewerRequest) { request in
+            GalleryImageViewer(
+                photos: [request.photo],
+                initialIndex: 0,
+                onTransferToDevice: { _ in },
+                editStateKeyForPhoto: { _ in .circle(request.post.id) },
+                transferImageProvider: { _ in
+                    let image = try await fetchTransferImageWithRefresh(for: request.post)
+                    return GalleryPreparedTransferImage(
+                        imageData: encodedImageData(for: image),
+                        image: image
+                    )
+                },
+                isContentLocked: true,
+                lockedPreviewText: "点击传输以查看",
+                transferButtonTitle: "传输到设备解锁原图"
+            )
+            .presentationDetents([.height(560)])
+            .presentationDragIndicator(.visible)
+            .environmentObject(bleService)
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 18) {
-            HStack(spacing: 20) {
-                CircleFeedTab(title: "发现", isSelected: true)
-                unavailableFeedTab(title: "关注")
-                unavailableFeedTab(title: "最新")
+        HStack(alignment: .center, spacing: 16) {
+            ForEach(FeedSection.allCases, id: \.self) { section in
+                feedTab(section)
             }
             Spacer()
-
-            Button {
-                isComposerPresented = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(Color(red: 0.86, green: 0.16, blue: 0.22), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("发布")
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -150,18 +176,128 @@ struct CircleView: View {
         .background(Color(.systemBackground))
     }
 
-    private func unavailableFeedTab(title: String) -> some View {
+    private func feedTab(_ section: FeedSection) -> some View {
         Button {
-            showToast("暂未开放，敬请期待", style: .info)
+            resetFeedHeaderVisibility()
+            selectedFeedSection = section
+            if section == .following {
+                showToast("暂未开放，敬请期待", style: .info)
+            }
         } label: {
-            CircleFeedTab(title: title, isSelected: false)
+            CircleFeedTab(title: section.title, isSelected: selectedFeedSection == section)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title)，暂未开放")
+        .accessibilityLabel(section.title)
+    }
+
+    @ViewBuilder
+    private var feedContent: some View {
+        if showsFullPageLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ZStack(alignment: .top) {
+                selectedFeedContent
+
+                if shouldShowTopLoading {
+                    CircleFeedTopLoadingView()
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedFeedContent: some View {
+        switch selectedFeedSection {
+        case .discover:
+            CircleFeedView(
+                posts: posts,
+                onTransfer: openTransferSheet,
+                onReport: handleReport,
+                onRefresh: refreshPosts,
+                onScrollOffsetChange: handleFeedScrollOffset
+            )
+        case .following:
+            CircleUnavailableFeedView(title: "关注")
+        case .latest:
+            CircleFeedView(
+                posts: latestPosts,
+                onTransfer: openTransferSheet,
+                onReport: handleReport,
+                onRefresh: refreshPosts,
+                onScrollOffsetChange: handleFeedScrollOffset
+            )
+        case .driftBottle:
+            CircleDriftBottleView(
+                posts: posts,
+                onTransfer: openTransferSheet,
+                onThrow: {
+                    isDriftBottleThrowPresented = true
+                },
+                onRefresh: refreshPosts,
+                onScrollOffsetChange: handleFeedScrollOffset
+            )
+        }
+    }
+
+    private var latestPosts: [CirclePost] {
+        posts.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var shouldShowBottomPublishButton: Bool {
+        selectedFeedSection == .discover || selectedFeedSection == .latest
+    }
+
+    private var bottomPublishButton: some View {
+        VStack {
+            Spacer()
+
+            HStack {
+                Spacer()
+
+                Button {
+                    isComposerPresented = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Color(red: 0.86, green: 0.16, blue: 0.22), in: Circle())
+                        .shadow(color: Color.black.opacity(0.18), radius: 16, x: 0, y: 8)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("发布作品")
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
+        .allowsHitTesting(true)
+    }
+
+    private func handleFeedScrollOffset(_ offset: CGFloat) {
+        if offset > -12 {
+            setHeaderHidden(false)
+        } else if offset < -34 {
+            setHeaderHidden(true)
+        }
+
+        lastFeedScrollOffset = offset
+    }
+
+    private func resetFeedHeaderVisibility() {
+        lastFeedScrollOffset = 0
+        setHeaderHidden(false)
+    }
+
+    private func setHeaderHidden(_ hidden: Bool) {
+        guard isHeaderHidden != hidden else { return }
+        isHeaderHidden = hidden
     }
 
     private var transferStatusState: CircleTransferStatusToast.StateStyle {
-        if transferCoordinator.isPreparingTransfer { return .preparing }
+        if isPreparingTransferSheet { return .preparing }
         switch bleService.transferPhase {
         case .preparing:
             return .preparing
@@ -177,7 +313,7 @@ struct CircleView: View {
     }
 
     private var transferStatusTitle: String {
-        if transferCoordinator.isPreparingTransfer { return "正在获取圈子图片" }
+        if isPreparingTransferSheet { return "正在获取圈子图片" }
         switch bleService.transferPhase {
         case .preparing:
             return "正在准备传输"
@@ -193,7 +329,7 @@ struct CircleView: View {
     }
 
     private var transferStatusSubtitle: String {
-        if transferCoordinator.isPreparingTransfer { return "图片不会在 App 内公开查看" }
+        if isPreparingTransferSheet { return "马上打开传输面板" }
         switch bleService.transferPhase {
         case .preparing:
             return "正在生成适合墨水屏的图片"
@@ -209,7 +345,7 @@ struct CircleView: View {
     }
 
     private var transferProgressValue: Double {
-        if transferCoordinator.isPreparingTransfer { return 0.08 }
+        if isPreparingTransferSheet { return 0.08 }
         switch bleService.transferPhase {
         case .preparing:
             return max(0.08, bleService.transferProgress)
@@ -230,16 +366,82 @@ struct CircleView: View {
         isLoadingPosts && posts.isEmpty
     }
 
-    private func handleTransfer(_ post: CirclePost) {
-        showTransferStatus()
-        Task {
-            do {
-                let accessToken = try await validAccessToken()
-                transferCoordinator.beginTransfer(post: post, apiClient: sessionAPIClient, accessToken: accessToken, bleService: bleService)
-            } catch {
-                handleSessionError(error)
+    private var shouldShowTopLoading: Bool {
+        isLoadingPosts && hasCompletedInitialPostsLoad
+    }
+
+    private var isTransferBusy: Bool {
+        isPreparingTransferSheet ||
+        bleService.transferPhase == .preparing ||
+        bleService.transferPhase == .transferring
+    }
+
+    private func openTransferSheet(_ post: CirclePost) {
+        guard !isTransferBusy else {
+            showToast(BleTransferError.transferBusy.localizedDescription, style: .error)
+            return
+        }
+        let previewImage = lockedTransferPreviewImage(for: post)
+        circleImageViewerRequest = CircleImageViewerRequest(
+            post: post,
+            photo: GalleryPhoto(
+                id: UUID(),
+                imageData: encodedImageData(for: previewImage),
+                image: previewImage,
+                title: post.title
+            )
+        )
+    }
+
+    private func lockedTransferPreviewImage(for post: CirclePost) -> UIImage {
+        let imageSize = CGSize(
+            width: max(360, post.previewWidth ?? post.targetWidth ?? 720),
+            height: max(520, post.previewHeight ?? post.targetHeight ?? 1080)
+        )
+        let colors = lockedPreviewColors(for: post.id + post.title)
+        let renderer = UIGraphicsImageRenderer(size: imageSize)
+
+        return renderer.image { context in
+            let cgContext = context.cgContext
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            let cgColors = colors.map(\.cgColor) as CFArray
+            let gradient = CGGradient(colorsSpace: colorSpace, colors: cgColors, locations: [0, 0.58, 1])
+
+            cgContext.drawLinearGradient(
+                gradient!,
+                start: CGPoint(x: 0, y: 0),
+                end: CGPoint(x: imageSize.width, y: imageSize.height),
+                options: []
+            )
+
+            UIColor.white.withAlphaComponent(0.10).setFill()
+            for index in 0..<5 {
+                let diameter = imageSize.width * CGFloat(0.24 + Double(index) * 0.07)
+                let origin = CGPoint(
+                    x: imageSize.width * CGFloat(0.12 + Double(index % 3) * 0.28),
+                    y: imageSize.height * CGFloat(0.14 + Double(index) * 0.13)
+                )
+                cgContext.fillEllipse(in: CGRect(origin: origin, size: CGSize(width: diameter, height: diameter)))
             }
         }
+    }
+
+    private func lockedPreviewColors(for seedText: String) -> [UIColor] {
+        let palettes: [[UIColor]] = [
+            [UIColor(red: 0.20, green: 0.29, blue: 0.36, alpha: 1), UIColor(red: 0.43, green: 0.48, blue: 0.57, alpha: 1), UIColor(red: 0.12, green: 0.18, blue: 0.24, alpha: 1)],
+            [UIColor(red: 0.34, green: 0.25, blue: 0.27, alpha: 1), UIColor(red: 0.58, green: 0.49, blue: 0.48, alpha: 1), UIColor(red: 0.18, green: 0.20, blue: 0.24, alpha: 1)],
+            [UIColor(red: 0.18, green: 0.31, blue: 0.39, alpha: 1), UIColor(red: 0.46, green: 0.58, blue: 0.66, alpha: 1), UIColor(red: 0.14, green: 0.22, blue: 0.28, alpha: 1)],
+            [UIColor(red: 0.42, green: 0.36, blue: 0.30, alpha: 1), UIColor(red: 0.62, green: 0.57, blue: 0.48, alpha: 1), UIColor(red: 0.22, green: 0.20, blue: 0.18, alpha: 1)]
+        ]
+        var hash: UInt32 = 2_166_136_261
+        for scalar in seedText.unicodeScalars {
+            hash = (hash ^ UInt32(scalar.value)) &* 16_777_619
+        }
+        return palettes[Int(hash) % palettes.count]
+    }
+
+    private func encodedImageData(for image: UIImage) -> Data {
+        image.jpegData(compressionQuality: 0.95) ?? image.pngData() ?? Data()
     }
 
     private func handleReport(_ post: CirclePost) {
@@ -263,6 +465,7 @@ struct CircleView: View {
             } catch {
                 handleSessionError(error)
             }
+            hasCompletedInitialPostsLoad = true
             isLoadingPosts = false
         }
     }
@@ -289,6 +492,10 @@ struct CircleView: View {
         }
     }
 
+    private func publishDriftBottle(imageData: Data) {
+        publish(imageData: imageData, title: "漂流瓶", tags: [])
+    }
+
     private func fetchPostsWithRefresh() async throws -> [CirclePost] {
         _ = try await validAccessToken()
         do {
@@ -307,6 +514,21 @@ struct CircleView: View {
             let refreshedToken = try await validAccessToken(forceRefresh: true)
             try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshedToken)
         }
+    }
+
+    private func fetchTransferImageWithRefresh(for post: CirclePost) async throws -> UIImage {
+        let accessToken = try await validAccessToken()
+        do {
+            return try await fetchTransferImage(for: post, accessToken: accessToken)
+        } catch CircleAPIError.unauthorized {
+            let refreshedToken = try await validAccessToken(forceRefresh: true)
+            return try await fetchTransferImage(for: post, accessToken: refreshedToken)
+        }
+    }
+
+    private func fetchTransferImage(for post: CirclePost, accessToken: String) async throws -> UIImage {
+        let ticket = try await sessionAPIClient.transferTicket(postID: post.id, accessToken: accessToken)
+        return try await sessionAPIClient.downloadTransferImage(from: ticket.downloadUrl)
     }
 
     private func restoreCachedPostsIfNeeded() {
@@ -436,6 +658,12 @@ struct CircleView: View {
     }
 }
 
+private struct CircleImageViewerRequest: Identifiable {
+    let id = UUID()
+    let post: CirclePost
+    let photo: GalleryPhoto
+}
+
 private final class CircleFeedPostCache {
     static let shared = CircleFeedPostCache()
 
@@ -521,7 +749,7 @@ private struct CircleFeedTopLoadingView: View {
         .background(.regularMaterial, in: Capsule())
         .overlay {
             Capsule()
-                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         }
         .shadow(color: Color.black.opacity(0.10), radius: 12, x: 0, y: 5)
         .accessibilityElement(children: .combine)
@@ -585,7 +813,7 @@ private struct CirclePublishStatusToast: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         }
         .shadow(color: Color.black.opacity(0.14), radius: 22, x: 0, y: 10)
         .accessibilityElement(children: .combine)
@@ -718,7 +946,7 @@ private struct CircleTransferStatusToast: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         }
         .shadow(color: Color.black.opacity(0.14), radius: 22, x: 0, y: 10)
     }

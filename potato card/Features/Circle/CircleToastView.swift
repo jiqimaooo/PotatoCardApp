@@ -34,7 +34,7 @@ struct CircleToastView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         }
         .shadow(color: Color.black.opacity(0.14), radius: 18, x: 0, y: 8)
         .accessibilityElement(children: .combine)

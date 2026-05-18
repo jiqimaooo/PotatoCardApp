@@ -4,6 +4,7 @@ import Foundation
 enum TransferEditStateKey: Hashable {
     case gallery(UUID)
     case album(String)
+    case circle(String)
 
     var rawValue: String {
         switch self {
@@ -11,6 +12,8 @@ enum TransferEditStateKey: Hashable {
             return "gallery:\(id.uuidString)"
         case .album(let name):
             return "album:\(name)"
+        case .circle(let id):
+            return "circle:\(id)"
         }
     }
 }

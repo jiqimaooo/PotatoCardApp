@@ -213,18 +213,6 @@ struct ContentView: View {
     private var heroCard: some View {
         VStack(spacing: 18) {
             ZStack {
-                RoundedRectangle(cornerRadius: 34, style: .continuous)
-                    .fill(cardFillColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 34, style: .continuous)
-                            .fill(.ultraThinMaterial.opacity(colorScheme == .dark ? 0.32 : 0.52))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 34, style: .continuous)
-                            .stroke(cardStrokeColor, lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.06), radius: 24, x: 0, y: 14)
-
                 ZStack {
                     if let transferredDeviceImage {
                         transferredDeviceImage

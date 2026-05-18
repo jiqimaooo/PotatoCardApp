@@ -259,10 +259,15 @@ private struct SelectedPhotoSet: Identifiable {
     }
 }
 
-private struct GalleryImageViewer: View {
+struct GalleryImageViewer: View {
     let photos: [GalleryPhoto]
     let initialIndex: Int
     let onTransferToDevice: (Data) -> Void
+    let editStateKeyForPhoto: (GalleryPhoto) -> TransferEditStateKey
+    let transferImageProvider: ((GalleryPhoto) async throws -> GalleryPreparedTransferImage)?
+    let isContentLocked: Bool
+    let lockedPreviewText: String
+    let transferButtonTitle: String
     // 由外层 GalleryView 提供，收到“修改名称”后同步到上层状态。
     var onRenamePhoto: ((UUID, String) -> Void)? = nil
 
@@ -273,6 +278,8 @@ private struct GalleryImageViewer: View {
     @State private var transferRequest: GalleryTransferRequest?
     @State private var pendingTransferData: Data?
     @State private var pendingTransferImage: UIImage?
+    @State private var isPreparingTransferImage = false
+    @State private var transferPreparationError: String?
     // 记录哪些照片已保存了“手动调整”状态，用来驱动预览与“手动调整”按钮的黄色指示。
     @State private var customizedPhotoIDs: Set<UUID> = []
     // 在 sheet 里修改过名称后本地缓存，只读走外层 photos 会丢掉变更。
@@ -282,11 +289,21 @@ private struct GalleryImageViewer: View {
         photos: [GalleryPhoto],
         initialIndex: Int,
         onTransferToDevice: @escaping (Data) -> Void,
+        editStateKeyForPhoto: @escaping (GalleryPhoto) -> TransferEditStateKey = { .gallery($0.id) },
+        transferImageProvider: ((GalleryPhoto) async throws -> GalleryPreparedTransferImage)? = nil,
+        isContentLocked: Bool = false,
+        lockedPreviewText: String = "点击传输以查看",
+        transferButtonTitle: String = "传输到设备",
         onRenamePhoto: ((UUID, String) -> Void)? = nil
     ) {
         self.photos = photos
         self.initialIndex = initialIndex
         self.onTransferToDevice = onTransferToDevice
+        self.editStateKeyForPhoto = editStateKeyForPhoto
+        self.transferImageProvider = transferImageProvider
+        self.isContentLocked = isContentLocked
+        self.lockedPreviewText = lockedPreviewText
+        self.transferButtonTitle = transferButtonTitle
         self.onRenamePhoto = onRenamePhoto
         _selectedIndex = State(initialValue: initialIndex)
     }
@@ -294,10 +311,15 @@ private struct GalleryImageViewer: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                (colorScheme == .dark ? Color.black : Color.white)
+                viewerBackgroundColor
                     .ignoresSafeArea()
 
                 devicePreview
+
+                if isContentLocked {
+                    lockedContentTitle
+                        .allowsHitTesting(false)
+                }
 
                 VStack {
                     Spacer()
@@ -311,27 +333,29 @@ private struct GalleryImageViewer: View {
                         .buttonStyle(.plain)
                         .disabled(activeDevice == nil)
 
-                        // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
-                        // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
-                        Button(action: openManualAdjustment) {
-                            Label("手动调整", systemImage: "slider.horizontal.3")
-                                .frame(minWidth: 100)
+                        if !isContentLocked {
+                            // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
+                            // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
+                            Button(action: openManualAdjustment) {
+                                Label("手动调整", systemImage: "slider.horizontal.3")
+                                    .frame(minWidth: 100)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.regular)
+                            .tint(currentPhotoIsCustomized ? .yellow : .secondary)
+                            .disabled(isTransferInProgress)
                         }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.regular)
-                        .tint(currentPhotoIsCustomized ? .yellow : .secondary)
-                        .disabled(isTransferInProgress)
                     }
-                    .padding(.bottom, 10)
-                    .offset(y: 20)
+                    .padding(.bottom, isContentLocked ? 28 : 10)
+                    .offset(y: isContentLocked ? 0 : 20)
                 }
             }
             .sheet(item: $transferRequest) { request in
                 TransferSheetView(
                     sourceImage: request.photo.image,
                     title: renamedTitles[request.photo.id] ?? request.photo.title,
-                    editStateKey: .gallery(request.photo.id),
+                    editStateKey: editStateKeyForPhoto(request.photo),
                     onTransferSucceeded: {
                         onTransferToDevice(request.photo.imageData)
                         dismiss()
@@ -364,9 +388,11 @@ private struct GalleryImageViewer: View {
                 dismiss()
             }
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(renamedTitles[photos[selectedIndex].id] ?? photos[selectedIndex].title)
-                        .font(.headline)
+                if !isContentLocked {
+                    ToolbarItem(placement: .principal) {
+                        Text(toolbarTitle)
+                            .font(.headline)
+                    }
                 }
             }
         }
@@ -374,7 +400,17 @@ private struct GalleryImageViewer: View {
 
     @ViewBuilder
     private var transferStatusView: some View {
-        if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
+        if isPreparingTransferImage {
+            Text("正在获取原图")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        } else if let transferPreparationError {
+            Text(transferPreparationError)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+        } else if case .failed = bleService.transferPhase, let errorMessage = bleService.errorMessage {
             Text(errorMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red)
@@ -386,13 +422,39 @@ private struct GalleryImageViewer: View {
         guard !isTransferInProgress, let device = activeDevice else { return }
 
         let photo = photos[selectedIndex]
+        transferPreparationError = nil
+
+        if let transferImageProvider {
+            isPreparingTransferImage = true
+            Task {
+                do {
+                    let preparedImage = try await transferImageProvider(photo)
+                    isPreparingTransferImage = false
+                    startTransfer(
+                        image: preparedImage.image,
+                        imageData: preparedImage.imageData,
+                        device: device,
+                        photo: photo
+                    )
+                } catch {
+                    isPreparingTransferImage = false
+                    transferPreparationError = error.localizedDescription
+                }
+            }
+            return
+        }
+
+        startTransfer(image: photo.image, imageData: photo.imageData, device: device, photo: photo)
+    }
+
+    private func startTransfer(image: UIImage, imageData: Data, device: BleDevice, photo: GalleryPhoto) {
         // 传输这张照片时默认也要使用用户保存过的“手动调整”，跟预览保持一致。
-        let savedAdjustment = TransferEditStateStore.load(for: .gallery(photo.id))
+        let savedAdjustment = TransferEditStateStore.load(for: editStateKeyForPhoto(photo))
         let adjustment = savedAdjustment ?? .default
         let fitMode: EInkImageFitMode = (savedAdjustment != nil && adjustment != .default) ? .manual : .centerCrop
-        let transferImage = transferImage(from: photo.image, device: device, fitMode: fitMode, adjustment: adjustment)
-        let displayImage = displayImage(from: photo.image, device: device, fitMode: fitMode, adjustment: adjustment)
-        pendingTransferData = photo.imageData
+        let transferImage = transferImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
+        let displayImage = displayImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
+        pendingTransferData = imageData
         pendingTransferImage = displayImage
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
@@ -438,7 +500,8 @@ private struct GalleryImageViewer: View {
     }
 
     private var isTransferInProgress: Bool {
-        bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
+        if isPreparingTransferImage { return true }
+        return bleService.transferPhase == .preparing || bleService.transferPhase == .transferring
     }
 
     private var primaryTransferButtonFillColor: Color {
@@ -451,38 +514,49 @@ private struct GalleryImageViewer: View {
 
     private var transferButtonProgressTitle: String {
         switch bleService.transferPhase {
+        case _ where isPreparingTransferImage:
+            return "正在获取原图"
         case .preparing:
             return "等待 \(transferProgressPercent)%"
         case .transferring:
             return "传输中 \(transferProgressPercent)%"
         default:
-            return "传输到设备"
+            return transferButtonTitle
         }
     }
 
     private var transferButtonLabel: some View {
         TransferProgressButtonLabel(
-            title: "传输到设备",
+            title: transferButtonTitle,
             progressTitle: transferButtonProgressTitle,
             progress: bleService.transferProgress,
             isInProgress: isTransferInProgress,
-            width: 140,
+            width: isContentLocked ? 190 : 140,
             height: 38,
             cornerRadius: 19,
             accentColor: primaryTransferButtonFillColor
         )
     }
 
+    private var lockedContentTitle: some View {
+        VStack {
+            Text(toolbarTitle)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var devicePreview: some View {
         ZStack {
             TabView(selection: $selectedIndex) {
                 ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                    AdjustedPhotoPreview(
-                        image: photo.image,
-                        adjustment: savedAdjustment(for: photo),
-                        screenSize: CGSize(width: 186, height: 280),
-                        renderTargetSize: renderTargetSize
-                    )
+                    screenPreview(for: photo)
                     .frame(width: 186, height: 280)
                     .tag(index)
                 }
@@ -503,7 +577,7 @@ private struct GalleryImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: -60)
+        .offset(y: isContentLocked ? -14 : -60)
     }
 
     private var renderTargetSize: CGSize {
@@ -515,14 +589,34 @@ private struct GalleryImageViewer: View {
         return customizedPhotoIDs.contains(photos[selectedIndex].id)
     }
 
+    @ViewBuilder
+    private func screenPreview(for photo: GalleryPhoto) -> some View {
+        if isContentLocked {
+            LockedPhotoPreview(
+                image: photo.image,
+                adjustment: savedAdjustment(for: photo),
+                screenSize: CGSize(width: 186, height: 280),
+                renderTargetSize: renderTargetSize,
+                message: lockedPreviewText
+            )
+        } else {
+            AdjustedPhotoPreview(
+                image: photo.image,
+                adjustment: savedAdjustment(for: photo),
+                screenSize: CGSize(width: 186, height: 280),
+                renderTargetSize: renderTargetSize
+            )
+        }
+    }
+
     // 加载某张照片对应的“手动调整”状态；缺省值代表没有自定义。
     private func savedAdjustment(for photo: GalleryPhoto) -> EInkManualAdjustment {
-        TransferEditStateStore.load(for: .gallery(photo.id)) ?? .default
+        TransferEditStateStore.load(for: editStateKeyForPhoto(photo)) ?? .default
     }
 
     private func refreshCustomizedPhotoIDs() {
         let customized = photos.compactMap { photo -> UUID? in
-            guard let saved = TransferEditStateStore.load(for: .gallery(photo.id)),
+            guard let saved = TransferEditStateStore.load(for: editStateKeyForPhoto(photo)),
                   saved != .default else {
                 return nil
             }
@@ -530,6 +624,19 @@ private struct GalleryImageViewer: View {
         }
         customizedPhotoIDs = Set(customized)
     }
+
+    private var viewerBackgroundColor: Color {
+        colorScheme == .dark ? Color(.systemGroupedBackground) : Color.white
+    }
+
+    private var toolbarTitle: String {
+        return renamedTitles[photos[selectedIndex].id] ?? photos[selectedIndex].title
+    }
+}
+
+struct GalleryPreparedTransferImage {
+    let imageData: Data
+    let image: UIImage
 }
 
 // MARK: - 单张图片应用手动调整后的预览
@@ -555,6 +662,54 @@ private struct AdjustedPhotoPreview: View {
                 .rotationEffect(.radians(Double(adjustment.rotation)))
                 .offset(x: adjustment.offsetX * offsetScale, y: adjustment.offsetY * offsetScale)
                 .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .frame(width: screenSize.width, height: screenSize.height)
+        .clipped()
+    }
+}
+
+private struct LockedPhotoPreview: View {
+    let image: UIImage
+    let adjustment: EInkManualAdjustment
+    let screenSize: CGSize
+    let renderTargetSize: CGSize
+    let message: String
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            AdjustedPhotoPreview(
+                image: image,
+                adjustment: adjustment,
+                screenSize: screenSize,
+                renderTargetSize: renderTargetSize
+            )
+            .scaleEffect(1.08)
+            .blur(radius: 16, opaque: true)
+            .saturation(0.9)
+            .contrast(0.94)
+            .overlay(Color.white.opacity(0.10))
+            .overlay(Color.black.opacity(0.12))
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.08),
+                    Color.black.opacity(0.28)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                Image(systemName: "lock.display")
+                    .font(.system(size: 18, weight: .semibold))
+
+                Text(message)
+                    .font(.system(size: 11, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(.white.opacity(0.92))
+            .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 3)
+            .padding(10)
         }
         .frame(width: screenSize.width, height: screenSize.height)
         .clipped()

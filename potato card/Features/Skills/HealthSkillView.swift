@@ -16,7 +16,7 @@ struct HealthSkillSectionView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var healthStore = HealthSkillStore()
     @State private var isSyncing = false
-    @State private var lastSyncMessage: String?
+    @State private var syncMessage: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -67,10 +67,12 @@ struct HealthSkillSectionView: View {
                     .foregroundStyle(primaryTextColor.opacity(0.78))
                     .lineLimit(1)
 
-                Text(statusText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(statusColor)
-                    .lineLimit(2)
+                if let syncMessage {
+                    Text(syncMessage)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(secondaryTextColor)
+                        .lineLimit(2)
+                }
 
                 HStack(spacing: 8) {
                     Button {
@@ -123,27 +125,6 @@ struct HealthSkillSectionView: View {
         "\(healthStore.config.defaultMode.title) · 400 x 600"
     }
 
-    private var statusText: String {
-        if let message = lastSyncMessage { return message }
-        if let date = healthStore.skill.lastSyncAt {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "M/d HH:mm"
-            return "\(healthStore.loadState.message) · 上次同步 \(formatter.string(from: date))"
-        }
-        return healthStore.loadState.message
-    }
-
-    private var statusColor: Color {
-        switch healthStore.loadState {
-        case .failed:
-            return .red
-        case .missingAuthorization:
-            return Color(red: 0.94, green: 0.52, blue: 0.14)
-        default:
-            return secondaryTextColor
-        }
-    }
-
     private var canSync: Bool {
         // 没绑定设备时也允许触发——协调器会自动复用天气技能里的设备或当前连接设备。
         healthStore.config.isEnabled && !isSyncing
@@ -151,21 +132,20 @@ struct HealthSkillSectionView: View {
 
     private func startSync() async {
         isSyncing = true
-        lastSyncMessage = "同步中…"
+        syncMessage = "同步中…"
         // 打标，使「天气卡片」的进度按钮不会跟着走动画。
         bleService.beginSync(source: HealthSkillSectionView.syncSource)
         defer { bleService.endSync(source: HealthSkillSectionView.syncSource) }
         do {
-            let message = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
+            syncMessage = try await HealthSkillPushCoordinator.shared.pushHealthDashboard(
                 mode: healthStore.config.defaultMode,
                 waitForFinalResult: false
             )
-            lastSyncMessage = message
         } catch {
             if let localized = error as? LocalizedError, let description = localized.errorDescription, !description.isEmpty {
-                lastSyncMessage = description
+                syncMessage = description
             } else {
-                lastSyncMessage = error.localizedDescription
+                syncMessage = error.localizedDescription
             }
         }
         isSyncing = false

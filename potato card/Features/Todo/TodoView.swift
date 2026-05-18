@@ -321,14 +321,14 @@ struct TodoView: View {
         .frame(height: 52)
         .padding(.horizontal, 16)
         .background(
-            Color.white,
+            addTodoContainerColor,
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.03), lineWidth: 1)
+                .stroke(addTodoContainerStrokeColor, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.07), radius: 18, x: 0, y: 8)
+        .shadow(color: addTodoShadowColor, radius: 18, x: 0, y: 8)
     }
 
     private func addTodo() {
@@ -462,6 +462,18 @@ struct TodoView: View {
 
     private var headerActionStrokeColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)
+    }
+
+    private var addTodoContainerColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.09) : .white
+    }
+
+    private var addTodoContainerStrokeColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.03)
+    }
+
+    private var addTodoShadowColor: Color {
+        Color.black.opacity(colorScheme == .dark ? 0.22 : 0.07)
     }
 }
 

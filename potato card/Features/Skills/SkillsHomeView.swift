@@ -7,7 +7,6 @@ struct SkillsHomeView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var weatherStore = WeatherSkillStore()
-    @StateObject private var aiStore = AISkillSettingsStore()
     @State private var activeSyncContext: WeatherSkillSyncContext?
     @State private var didHandleActiveSyncSuccess = false
     @State private var showsWeatherSampleData = false
@@ -33,11 +32,7 @@ struct SkillsHomeView: View {
         }
         .task {
             await weatherStore.onAppear()
-            aiStore.reload()
             backfillTargetDeviceSelectionIfNeeded()
-        }
-        .onAppear {
-            aiStore.reload()
         }
         .onChange(of: bleService.connectedDevice?.id) { _ in
             backfillTargetDeviceSelectionIfNeeded()
@@ -111,11 +106,6 @@ struct SkillsHomeView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(primaryTextColor.opacity(0.78))
                     .lineLimit(1)
-
-                Text(statusText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(statusColor)
-                    .lineLimit(2)
 
                 HStack(spacing: 8) {
                     Button {
@@ -218,11 +208,6 @@ struct SkillsHomeView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(primaryTextColor.opacity(0.78))
                     .lineLimit(1)
-
-                Text(activeDevice == nil ? "连接设备后可直接传输专辑封面" : "当前设备：\(activeDevice?.name ?? "已连接")")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(secondaryTextColor)
-                    .lineLimit(2)
 
                 HStack(spacing: 8) {
                     NavigationLink {
@@ -344,15 +329,10 @@ struct SkillsHomeView: View {
                     Spacer(minLength: 8)
                 }
 
-                Text(aiStore.selectedModelTitle)
+                Text("文字生成 · 适配土豆片屏幕")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(primaryTextColor.opacity(0.78))
                     .lineLimit(1)
-
-                Text(aiStore.apiKeyExists ? "已配置 API Key · \(aiStore.config.defaultSize.displayText)" : "配置 API Key 后可在快捷指令中生成")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(aiStore.apiKeyExists ? secondaryTextColor : Color(red: 0.94, green: 0.52, blue: 0.14))
-                    .lineLimit(2)
 
                 HStack(spacing: 8) {
                     NavigationLink {
@@ -485,37 +465,6 @@ struct SkillsHomeView: View {
 
     private var compactMetaText: String {
         "\(weatherLocationLabel) · \(weatherStore.config.updateFrequency.title) · \(weatherStore.config.template.title)"
-    }
-
-    private var statusText: String {
-        if showsWeatherSampleData {
-            if let syncText = syncTimeText {
-                return "示例数据预览 · 上次同步 \(syncText)"
-            }
-            return "示例数据预览"
-        }
-        if let syncText = syncTimeText {
-            return "\(weatherStore.loadState.message) · 上次同步 \(syncText)"
-        }
-        return weatherStore.loadState.message
-    }
-
-    private var statusColor: Color {
-        if showsWeatherSampleData {
-            return secondaryTextColor
-        }
-        if case .failed = weatherStore.loadState {
-            return .red
-        }
-        if weatherStore.loadState == .missingCredentials {
-            return Color(red: 0.94, green: 0.52, blue: 0.14)
-        }
-        return secondaryTextColor
-    }
-
-    private var syncTimeText: String? {
-        guard let date = weatherStore.skill.lastSyncAt else { return nil }
-        return Self.syncTimeFormatter.string(from: date)
     }
 
     private var weatherLocationLabel: String {
@@ -728,11 +677,6 @@ struct SkillsHomeView: View {
         }
     }
 
-    private static let syncTimeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M/d HH:mm"
-        return formatter
-    }()
 }
 
 private struct AlbumSkillDetailView: View {
