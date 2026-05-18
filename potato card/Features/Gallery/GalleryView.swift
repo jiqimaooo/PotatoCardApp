@@ -123,7 +123,7 @@ struct GalleryView: View {
                     }
                 }
             }
-            .padding(.bottom, 12)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .padding(.horizontal, -24)
     }

@@ -48,7 +48,7 @@ struct CircleFeedView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
             }
         }
         .coordinateSpace(name: CircleFeedScrollCoordinateSpace.name)
@@ -132,7 +132,8 @@ struct CircleDriftBottleView: View {
                         )
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, AppBottomBarMetrics.floatingControlBottomPadding)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 } else {
                     CircleDriftBottleStartView(
@@ -142,7 +143,8 @@ struct CircleDriftBottleView: View {
                         onStart: drawNextBottle
                     )
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, AppBottomBarMetrics.floatingControlBottomPadding)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }

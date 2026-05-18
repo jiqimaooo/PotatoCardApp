@@ -24,7 +24,7 @@ struct AISkillConfigView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
-            .padding(.bottom, 32)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .background(pageBackgroundColor.ignoresSafeArea())
         .dismissKeyboardOnBackgroundTap()
@@ -67,7 +67,7 @@ struct AISkillConfigView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .background(Color.black.opacity(0.78), in: Capsule())
-                    .padding(.bottom, 22)
+                    .padding(.bottom, AppBottomBarMetrics.floatingControlBottomPadding)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .task(id: toast) {
                         try? await Task.sleep(nanoseconds: 1_500_000_000)

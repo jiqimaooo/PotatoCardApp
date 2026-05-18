@@ -32,7 +32,7 @@ struct TodoView: View {
             addTodoView
                 .padding(.horizontal, 24)
                 .padding(.top, 20)
-                .padding(.bottom, 12)
+                .padding(.bottom, AppBottomBarMetrics.floatingControlBottomPadding)
                 .background(pageBackgroundColor)
         }
         .background {

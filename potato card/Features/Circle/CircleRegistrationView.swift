@@ -22,6 +22,7 @@ struct CircleRegistrationView: View {
     @FocusState private var passwordFocused: Bool
 
     private let circleGreen = Color(red: 0.23, green: 0.68, blue: 0.28)
+    private let toastBottomPadding = AppBottomBarMetrics.floatingControlBottomPadding
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -37,13 +38,13 @@ struct CircleRegistrationView: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
-                .padding(.bottom, 28)
+                .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
             }
 
             if let toastMessage {
                 CircleToastView(message: toastMessage)
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, toastBottomPadding)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }

@@ -228,7 +228,8 @@ struct HealthSkillDetailView: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .navigationTitle("健康看板")
         .navigationBarTitleDisplayMode(.inline)

@@ -28,7 +28,7 @@ struct SkillsHomeView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
-            .padding(.bottom, 28)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .task {
             await weatherStore.onAppear()
@@ -748,7 +748,7 @@ private struct WeatherSkillDetailView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
-            .padding(.bottom, 32)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .navigationTitle("天气看板")
         .navigationBarTitleDisplayMode(.inline)

@@ -75,7 +75,7 @@ struct ContentView: View {
                 .tag(Tab.skills)
         }
         .tint(accentColor)
-        .toolbarBackground(selectedTab == .circle ? .hidden : .automatic, for: .tabBar)
+        .toolbarBackground(.hidden, for: .tabBar)
         .overlay(alignment: .bottom) {
             proximityConnectionCard
         }
@@ -121,25 +121,19 @@ struct ContentView: View {
         }
     }
 
-    private func configureTabBarAppearance(for tab: Tab) {
-        let isCircleTab = tab == .circle
+    private func configureTabBarAppearance(for _: Tab) {
         let appearance = UITabBarAppearance()
-
-        if isCircleTab {
-            appearance.configureWithTransparentBackground()
-            appearance.backgroundColor = .clear
-            appearance.backgroundEffect = nil
-            appearance.shadowColor = .clear
-            appearance.shadowImage = UIImage()
-        } else {
-            appearance.configureWithDefaultBackground()
-        }
+        appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = .clear
+        appearance.backgroundEffect = nil
+        appearance.shadowColor = .clear
+        appearance.shadowImage = UIImage()
 
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
-        UITabBar.appearance().isTranslucent = isCircleTab
+        UITabBar.appearance().isTranslucent = true
 
-        updateExistingTabBars(appearance: appearance, isTransparent: isCircleTab)
+        updateExistingTabBars(appearance: appearance, isTransparent: true)
     }
 
     private func updateExistingTabBars(appearance: UITabBarAppearance, isTransparent: Bool) {
@@ -181,7 +175,7 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 22)
-                    .padding(.bottom, 40)
+                    .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -371,7 +365,7 @@ struct ContentView: View {
                 )
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.30 : 0.14), radius: 28, x: 0, y: 14)
                 .padding(.horizontal, 18)
-                .padding(.bottom, 20)
+                .padding(.bottom, AppBottomBarMetrics.floatingControlBottomPadding)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.86), value: bleService.proximityPromptDevice?.id)

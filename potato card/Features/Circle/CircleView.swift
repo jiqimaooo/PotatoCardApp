@@ -24,6 +24,7 @@ struct CircleView: View {
     @State private var isPreparingTransferSheet = false
 
     private let apiClient: CircleAPIClient
+    private let bottomFloatingContentPadding = AppBottomBarMetrics.floatingControlBottomPadding
 
     private enum FeedSection: CaseIterable, Hashable {
         case discover
@@ -103,7 +104,7 @@ struct CircleView: View {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, bottomFloatingContentPadding)
                 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isTransferStatusVisible)
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: toastMessage)
@@ -333,7 +334,7 @@ struct CircleView: View {
                 .accessibilityLabel("发布作品")
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 112)
+            .padding(.bottom, bottomFloatingContentPadding)
         }
         .allowsHitTesting(true)
     }
