@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 private struct CircleFeedScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -15,6 +16,8 @@ private enum CircleFeedScrollCoordinateSpace {
 
 struct CircleFeedView: View {
     let posts: [CirclePost]
+    let viewedPostIDs: Set<String>
+    let isImageLoadingEnabled: Bool
     let onTransfer: (CirclePost) -> Void
     let onReport: (CirclePost) -> Void
     let onRefresh: () -> Void
@@ -30,11 +33,15 @@ struct CircleFeedView: View {
                 HStack(alignment: .top, spacing: 10) {
                     CircleMasonryColumn(
                         posts: columns.left,
+                        viewedPostIDs: viewedPostIDs,
+                        isImageLoadingEnabled: isImageLoadingEnabled,
                         onTransfer: onTransfer,
                         onReport: onReport
                     )
                     CircleMasonryColumn(
                         posts: columns.right,
+                        viewedPostIDs: viewedPostIDs,
+                        isImageLoadingEnabled: isImageLoadingEnabled,
                         onTransfer: onTransfer,
                         onReport: onReport
                     )
@@ -82,24 +89,23 @@ struct CircleDriftBottleView: View {
 
     @State private var selectedPostID: String?
     @State private var isDrawingBottle = false
+    @AppStorage("CircleDriftBottle.dailyDrawDate") private var dailyDrawDate = ""
+    @AppStorage("CircleDriftBottle.dailyDrawCount") private var dailyDrawCount = 0
+
+    private static let dailyDrawLimit = 3
 
     var body: some View {
         GeometryReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                CircleFeedScrollOffsetReader()
-
+            ZStack {
                 if posts.isEmpty {
                     CircleDriftBottleEmptyView()
-                        .frame(minHeight: proxy.size.height)
+                        .padding(.horizontal, 16)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
                 } else if let selectedPost {
                     VStack(spacing: 14) {
                         CircleDriftBottleCard(
                             post: selectedPost,
-                            isDrawing: isDrawingBottle,
-                            onTransfer: {
-                                guard !isDrawingBottle else { return }
-                                onTransfer(selectedPost)
-                            }
+                            isDrawing: isDrawingBottle
                         )
                         .id(selectedPost.id)
                         .transition(
@@ -111,34 +117,42 @@ struct CircleDriftBottleView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .layoutPriority(1)
 
+                        CircleDriftBottleTransferButton(
+                            isDrawing: isDrawingBottle,
+                            onTransfer: {
+                                guard !isDrawingBottle else { return }
+                                onTransfer(selectedPost)
+                            }
+                        )
+
                         CircleDriftBottleDrawAgainButton(
                             isDrawing: isDrawingBottle,
+                            remainingDrawCount: remainingDrawCount,
                             onDraw: drawNextBottle
                         )
                     }
-                    .frame(minHeight: max(0, proxy.size.height - 32))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 16)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
                 } else {
                     CircleDriftBottleStartView(
                         isDrawing: isDrawingBottle,
+                        remainingDrawCount: remainingDrawCount,
                         onThrow: onThrow,
                         onStart: drawNextBottle
                     )
-                    .frame(minHeight: max(0, proxy.size.height - 32))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 16)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
-            .refreshable {
-                onRefresh()
-            }
-            .coordinateSpace(name: CircleFeedScrollCoordinateSpace.name)
-            .onPreferenceChange(CircleFeedScrollOffsetPreferenceKey.self, perform: onScrollOffsetChange)
         }
-        .background(CircleFeedStyle.pageBackground)
         .animation(.spring(response: 0.46, dampingFraction: 0.86), value: selectedPostID)
-        .onAppear(perform: ensureSelectedPost)
+        .onAppear {
+            onScrollOffsetChange(0)
+            resetDailyDrawCountIfNeeded()
+            ensureSelectedPost()
+        }
         .onChange(of: posts) { _ in
             ensureSelectedPost()
         }
@@ -147,6 +161,19 @@ struct CircleDriftBottleView: View {
     private var selectedPost: CirclePost? {
         guard let selectedPostID else { return nil }
         return posts.first(where: { $0.id == selectedPostID })
+    }
+
+    private var remainingDrawCount: Int {
+        max(0, Self.dailyDrawLimit - effectiveDailyDrawCount)
+    }
+
+    private var effectiveDailyDrawCount: Int {
+        dailyDrawDate == currentDayKey ? dailyDrawCount : 0
+    }
+
+    private var currentDayKey: String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
     }
 
     private func ensureSelectedPost() {
@@ -179,6 +206,7 @@ struct CircleDriftBottleView: View {
 
     private func drawNextBottle() {
         guard !isDrawingBottle else { return }
+        guard consumeDailyDrawChance() else { return }
 
         withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
             isDrawingBottle = true
@@ -195,6 +223,290 @@ struct CircleDriftBottleView: View {
                 }
             }
         }
+    }
+
+    private func resetDailyDrawCountIfNeeded() {
+        let dayKey = currentDayKey
+        guard dailyDrawDate != dayKey else { return }
+        dailyDrawDate = dayKey
+        dailyDrawCount = 0
+    }
+
+    private func consumeDailyDrawChance() -> Bool {
+        resetDailyDrawCountIfNeeded()
+        guard dailyDrawCount < Self.dailyDrawLimit else { return false }
+        dailyDrawCount += 1
+        return true
+    }
+}
+
+struct CircleDriftBottleOceanBackdrop: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            GeometryReader { proxy in
+                let phase = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                let colors = palette
+
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            colors.skyTop,
+                            colors.skyMid,
+                            colors.horizon,
+                            colors.seaBack,
+                            colors.seaDeep
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+
+                    sun(color: colors.sun, in: proxy.size)
+                    clouds(color: colors.cloud, in: proxy.size, phase: phase)
+                    lightBands(color: colors.light, in: proxy.size, phase: phase)
+
+                    waveBand(
+                        color: colors.seaBack.opacity(0.86),
+                        foamColor: colors.foam.opacity(0.32),
+                        in: proxy.size,
+                        yRatio: 0.44,
+                        amplitude: 18,
+                        wavelength: 160,
+                        phase: phase * 0.42
+                    )
+
+                    waveBand(
+                        color: colors.seaMid.opacity(0.90),
+                        foamColor: colors.foam.opacity(0.42),
+                        in: proxy.size,
+                        yRatio: 0.56,
+                        amplitude: 24,
+                        wavelength: 130,
+                        phase: phase * -0.58
+                    )
+
+                    waveBand(
+                        color: colors.seaFront.opacity(0.96),
+                        foamColor: colors.foam.opacity(0.56),
+                        in: proxy.size,
+                        yRatio: 0.70,
+                        amplitude: 30,
+                        wavelength: 115,
+                        phase: phase * 0.74
+                    )
+
+                    driftingBottle(in: proxy.size, phase: phase, colors: colors)
+                    bubbles(in: proxy.size, phase: phase, colors: colors)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+        }
+    }
+
+    private var palette: BackdropPalette {
+        if colorScheme == .dark {
+            return BackdropPalette(
+                skyTop: Color(red: 0.04, green: 0.09, blue: 0.16),
+                skyMid: Color(red: 0.05, green: 0.16, blue: 0.24),
+                horizon: Color(red: 0.08, green: 0.27, blue: 0.36),
+                seaBack: Color(red: 0.08, green: 0.42, blue: 0.56),
+                seaMid: Color(red: 0.04, green: 0.31, blue: 0.48),
+                seaFront: Color(red: 0.02, green: 0.19, blue: 0.34),
+                seaDeep: Color(red: 0.02, green: 0.07, blue: 0.14),
+                foam: Color(red: 0.78, green: 0.95, blue: 1.00),
+                cloud: Color(red: 0.70, green: 0.86, blue: 0.96),
+                sun: Color(red: 0.40, green: 0.78, blue: 1.00),
+                light: Color(red: 0.65, green: 0.92, blue: 1.00),
+                glass: Color(red: 0.56, green: 0.86, blue: 0.95),
+                cork: Color(red: 0.68, green: 0.53, blue: 0.34),
+                note: Color(red: 0.98, green: 0.96, blue: 0.88)
+            )
+        }
+
+        return BackdropPalette(
+            skyTop: Color(red: 0.81, green: 0.94, blue: 1.00),
+            skyMid: Color(red: 0.93, green: 0.98, blue: 1.00),
+            horizon: Color(red: 0.86, green: 0.96, blue: 0.97),
+            seaBack: Color(red: 0.54, green: 0.86, blue: 0.94),
+            seaMid: Color(red: 0.22, green: 0.68, blue: 0.88),
+            seaFront: Color(red: 0.02, green: 0.42, blue: 0.70),
+            seaDeep: Color(red: 0.02, green: 0.24, blue: 0.46),
+            foam: .white,
+            cloud: Color(red: 0.55, green: 0.77, blue: 0.88),
+            sun: Color(red: 1.00, green: 0.84, blue: 0.43),
+            light: Color.white,
+            glass: Color(red: 0.61, green: 0.88, blue: 0.96),
+            cork: Color(red: 0.72, green: 0.56, blue: 0.34),
+            note: Color(red: 1.00, green: 0.96, blue: 0.84)
+        )
+    }
+
+    private func sun(color: Color, in size: CGSize) -> some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [color.opacity(0.54), color.opacity(0.18), color.opacity(0)],
+                    center: .center,
+                    startRadius: 2,
+                    endRadius: size.width * 0.28
+                )
+            )
+            .frame(width: size.width * 0.56, height: size.width * 0.56)
+            .position(x: size.width * 0.86, y: size.height * 0.18)
+    }
+
+    private func clouds(color: Color, in size: CGSize, phase: TimeInterval) -> some View {
+        ZStack {
+            cloudShape(color: color.opacity(0.24), width: size.width * 0.40, height: 34)
+                .position(x: size.width * 0.20 + CGFloat(oscillation(phase, duration: 13, low: -10, high: 12)), y: size.height * 0.16)
+
+            cloudShape(color: color.opacity(0.18), width: size.width * 0.34, height: 28)
+                .position(x: size.width * 0.74 + CGFloat(oscillation(phase, duration: 16, low: 12, high: -12)), y: size.height * 0.23)
+        }
+    }
+
+    private func cloudShape(color: Color, width: CGFloat, height: CGFloat) -> some View {
+        Capsule()
+            .fill(color)
+            .frame(width: width, height: height)
+            .blur(radius: 0.6)
+    }
+
+    private func lightBands(color: Color, in size: CGSize, phase: TimeInterval) -> some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .fill(color.opacity(0.08 - Double(index) * 0.015))
+                    .frame(width: size.width * (0.72 + CGFloat(index) * 0.12), height: 18)
+                    .rotationEffect(.degrees(-12 + Double(index) * 7))
+                    .position(
+                        x: size.width * (0.40 + CGFloat(index) * 0.16) + CGFloat(oscillation(phase, duration: 9 + Double(index), low: -14, high: 14)),
+                        y: size.height * (0.34 + CGFloat(index) * 0.09)
+                    )
+            }
+        }
+        .blendMode(.screen)
+    }
+
+    private func waveBand(
+        color: Color,
+        foamColor: Color,
+        in size: CGSize,
+        yRatio: CGFloat,
+        amplitude: CGFloat,
+        wavelength: CGFloat,
+        phase: TimeInterval
+    ) -> some View {
+        ZStack(alignment: .top) {
+            wavePath(in: size, yRatio: yRatio, amplitude: amplitude, wavelength: wavelength, phase: phase)
+                .fill(color)
+
+            waveLine(in: size, yRatio: yRatio, amplitude: amplitude * 0.52, wavelength: wavelength, phase: phase)
+                .stroke(foamColor, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                .blur(radius: 0.2)
+        }
+    }
+
+    private func wavePath(in size: CGSize, yRatio: CGFloat, amplitude: CGFloat, wavelength: CGFloat, phase: TimeInterval) -> Path {
+        Path { path in
+            let baseline = size.height * yRatio
+            var x: CGFloat = -wavelength
+            path.move(to: CGPoint(x: x, y: baseline))
+
+            while x <= size.width + wavelength {
+                let nextX = x + wavelength
+                let controlY = baseline + amplitude * CGFloat(sin((Double(x) / Double(wavelength) + phase) * .pi))
+                path.addQuadCurve(
+                    to: CGPoint(x: nextX, y: baseline),
+                    control: CGPoint(x: x + wavelength / 2, y: controlY)
+                )
+                x = nextX
+            }
+
+            path.addLine(to: CGPoint(x: size.width + wavelength, y: size.height + 40))
+            path.addLine(to: CGPoint(x: -wavelength, y: size.height + 40))
+            path.closeSubpath()
+        }
+    }
+
+    private func waveLine(in size: CGSize, yRatio: CGFloat, amplitude: CGFloat, wavelength: CGFloat, phase: TimeInterval) -> Path {
+        Path { path in
+            let baseline = size.height * yRatio
+            var x: CGFloat = -wavelength
+            path.move(to: CGPoint(x: x, y: baseline))
+
+            while x <= size.width + wavelength {
+                let nextX = x + wavelength
+                let controlY = baseline + amplitude * CGFloat(sin((Double(x) / Double(wavelength) + phase) * .pi))
+                path.addQuadCurve(
+                    to: CGPoint(x: nextX, y: baseline),
+                    control: CGPoint(x: x + wavelength / 2, y: controlY)
+                )
+                x = nextX
+            }
+        }
+    }
+
+    private func driftingBottle(in size: CGSize, phase: TimeInterval, colors: BackdropPalette) -> some View {
+        let bob = oscillation(phase, duration: 4.4, low: -1, high: 1)
+
+        return CircleDriftBottleGlyph()
+            .scaleEffect(1.15)
+            .rotationEffect(.degrees(-8 + bob * 6))
+            .opacity(0.34)
+            .position(
+                x: size.width * 0.26 + CGFloat(bob * 10),
+                y: size.height * 0.54 + CGFloat(bob * 7)
+            )
+            .shadow(color: colors.seaDeep.opacity(0.22), radius: 18, x: 0, y: 10)
+    }
+
+    private func bubbles(in size: CGSize, phase: TimeInterval, colors: BackdropPalette) -> some View {
+        ZStack {
+            ForEach(0..<12, id: \.self) { index in
+                let progress = bubbleProgress(phase, duration: 5.8 + Double(index % 4), delay: Double(index) * 0.37)
+                let x = size.width * (0.10 + CGFloat((index * 17) % 80) / 100)
+                let baseY = size.height * (0.92 - CGFloat(index % 5) * 0.08)
+
+                Circle()
+                    .stroke(colors.foam.opacity(0.26), lineWidth: 1)
+                    .frame(width: 5 + CGFloat(index % 4) * 3, height: 5 + CGFloat(index % 4) * 3)
+                    .position(
+                        x: x + CGFloat(oscillation(phase + Double(index), duration: 3.2, low: -8, high: 8)),
+                        y: baseY - size.height * 0.34 * CGFloat(progress)
+                    )
+                    .opacity(min(progress / 0.25, (1 - progress) / 0.28))
+            }
+        }
+    }
+
+    private func bubbleProgress(_ phase: TimeInterval, duration: Double, delay: Double) -> Double {
+        ((phase + delay).truncatingRemainder(dividingBy: duration)) / duration
+    }
+
+    private func oscillation(_ phase: TimeInterval, duration: Double, low: Double, high: Double) -> Double {
+        guard !reduceMotion else { return (low + high) / 2 }
+        let normalized = (sin((phase / duration) * .pi * 2) + 1) / 2
+        return low + ((high - low) * normalized)
+    }
+
+    private struct BackdropPalette {
+        let skyTop: Color
+        let skyMid: Color
+        let horizon: Color
+        let seaBack: Color
+        let seaMid: Color
+        let seaFront: Color
+        let seaDeep: Color
+        let foam: Color
+        let cloud: Color
+        let sun: Color
+        let light: Color
+        let glass: Color
+        let cork: Color
+        let note: Color
     }
 }
 
@@ -213,11 +525,13 @@ private struct CircleFeedScrollOffsetReader: View {
 }
 
 private struct CircleDriftBottleStartView: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     let isDrawing: Bool
+    let remainingDrawCount: Int
     let onThrow: () -> Void
     let onStart: () -> Void
+
+    private let primaryButtonWidth: CGFloat = 218
+    private let controlsVerticalOffset: CGFloat = 108
 
     var body: some View {
         ZStack {
@@ -228,9 +542,8 @@ private struct CircleDriftBottleStartView: View {
                 VStack(spacing: 26) {
                     Spacer(minLength: 0)
 
-                    CircleDriftBottleOceanSVGView(colorScheme: colorScheme)
-                        .frame(height: 230)
-                        .frame(maxWidth: 340)
+                    CircleDriftBottleHeroGlyph()
+                        .frame(width: 190, height: 168)
                         .accessibilityHidden(true)
 
                     Button(action: onThrow) {
@@ -238,7 +551,7 @@ private struct CircleDriftBottleStartView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(CircleFeedStyle.driftTint)
-                            .frame(width: 168, height: 48)
+                            .frame(width: primaryButtonWidth, height: 48)
                             .background(
                                 CircleFeedStyle.driftTint.opacity(0.10),
                                 in: Capsule()
@@ -252,23 +565,57 @@ private struct CircleDriftBottleStartView: View {
                     .disabled(isDrawing)
 
                     Button(action: onStart) {
-                        Label("开始捞", systemImage: "sparkles")
+                        Label("开始捞（还有 \(remainingDrawCount) 次）", systemImage: "sparkles")
                             .font(.system(size: 16, weight: .semibold))
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(.white)
-                            .frame(width: 168, height: 52)
-                            .background(CircleFeedStyle.driftTint, in: Capsule())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.86)
+                            .frame(width: primaryButtonWidth, height: 52)
+                            .background(
+                                remainingDrawCount > 0 ? CircleFeedStyle.driftTint : Color(.systemGray3),
+                                in: Capsule()
+                            )
                             .shadow(color: CircleFeedStyle.driftTint.opacity(0.26), radius: 18, x: 0, y: 10)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isDrawing || remainingDrawCount <= 0)
 
                     Spacer(minLength: 0)
                 }
+                .offset(y: controlsVerticalOffset)
                 .transition(.scale(scale: 0.94).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isDrawing)
+    }
+}
+
+private struct CircleDriftBottleHeroGlyph: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .stroke(
+                        Color.white.opacity(colorScheme == .dark ? 0.14 - Double(index) * 0.03 : 0.36 - Double(index) * 0.06),
+                        lineWidth: 1.2
+                    )
+                    .frame(width: 118 + CGFloat(index) * 32, height: 118 + CGFloat(index) * 32)
+            }
+
+            Circle()
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.22))
+                .frame(width: 122, height: 122)
+                .blur(radius: 0.2)
+
+            CircleDriftBottleGlyph()
+                .scaleEffect(1.10)
+                .rotationEffect(.degrees(7))
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.24 : 0.12), radius: 18, x: 0, y: 10)
+        }
     }
 }
 
@@ -599,11 +946,12 @@ private struct CircleDriftBottleOceanSVGView: View {
 
 private struct CircleDriftBottleDrawAgainButton: View {
     let isDrawing: Bool
+    let remainingDrawCount: Int
     let onDraw: () -> Void
 
     var body: some View {
         Button(action: onDraw) {
-            Label(isDrawing ? "正在打捞" : "再捞一个", systemImage: isDrawing ? "sparkles" : "shuffle")
+            Label(drawTitle, systemImage: isDrawing ? "sparkles" : "shuffle")
                 .font(.system(size: 14, weight: .semibold))
                 .labelStyle(.titleAndIcon)
                 .foregroundStyle(CircleFeedStyle.driftTint)
@@ -619,32 +967,50 @@ private struct CircleDriftBottleDrawAgainButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .disabled(isDrawing || remainingDrawCount <= 0)
+        .opacity(remainingDrawCount > 0 ? 1 : 0.58)
+    }
+
+    private var drawTitle: String {
+        if isDrawing { return "正在打捞" }
+        return "再捞一个（还有 \(remainingDrawCount) 次）"
+    }
+}
+
+private struct CircleDriftBottleTransferButton: View {
+    let isDrawing: Bool
+    let onTransfer: () -> Void
+
+    var body: some View {
+        Button(action: onTransfer) {
+            Label("传到土豆片解锁", systemImage: "paperplane.fill")
+                .font(.system(size: 15, weight: .bold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(CircleFeedStyle.driftTint, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: CircleFeedStyle.driftTint.opacity(0.24), radius: 14, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
         .disabled(isDrawing)
+        .opacity(isDrawing ? 0.72 : 1)
+        .accessibilityLabel("传输漂流瓶图片")
     }
 }
 
 private struct CircleDriftBottleCard: View {
     let post: CirclePost
     let isDrawing: Bool
-    let onTransfer: () -> Void
-
-    private var seed: Int {
-        CircleFeedStyle.seed(for: "drift-bottle-" + post.id)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: onTransfer) {
-                CircleDriftBottleDevicePreview(post: post, seed: seed)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 430, maxHeight: .infinity)
-                    .layoutPriority(1)
-                    .scaleEffect(isDrawing ? 0.98 : 1)
-                    .blur(radius: isDrawing ? 2 : 0)
-            }
-            .buttonStyle(.plain)
-            .disabled(isDrawing)
-            .accessibilityLabel("传输漂流瓶图片")
+            CircleDriftBottleLockedPreview(post: post)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 430, maxHeight: .infinity)
+                .layoutPriority(1)
+                .scaleEffect(isDrawing ? 0.98 : 1)
+                .blur(radius: isDrawing ? 2 : 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(14)
@@ -783,56 +1149,155 @@ private struct CircleDriftBottleGlyph: View {
     }
 }
 
-private struct CircleDriftBottleDevicePreview: View {
+private struct CircleDriftBottleLockedPreview: View {
     let post: CirclePost
-    let seed: Int
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(CircleFeedStyle.driftPreviewBackground)
+        GeometryReader { proxy in
+            ZStack {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: backgroundColors,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
 
-            screenPreview
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                CircleDriftBottleWavePattern()
+                    .padding(.horizontal, -12)
+                    .padding(.top, proxy.size.height * 0.38)
+                    .allowsHitTesting(false)
 
-            VStack {
-                Spacer()
+                VStack(spacing: 18) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground).opacity(colorScheme == .dark ? 0.72 : 0.86))
+                            .frame(width: 156, height: 156)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.64), lineWidth: 1)
+                            }
+                            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.08), radius: 22, x: 0, y: 12)
 
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.display")
-                        .font(.system(size: 12, weight: .semibold))
+                        CircleAvatarView(
+                            username: post.author.username,
+                            avatarKey: post.author.avatarKey,
+                            avatarUrl: post.author.avatarUrl,
+                            size: 74
+                        )
+                        .overlay {
+                            Circle()
+                                .stroke(Color.white.opacity(colorScheme == .dark ? 0.20 : 0.86), lineWidth: 2)
+                        }
+                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.24 : 0.10), radius: 18, x: 0, y: 10)
 
-                    Text("点击传输以查看")
-                        .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(CircleFeedStyle.driftTint, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.50), lineWidth: 1)
+                            }
+                            .shadow(color: CircleFeedStyle.driftTint.opacity(0.28), radius: 12, x: 0, y: 6)
+                            .offset(x: 50, y: 48)
+                    }
+
+                    VStack(spacing: 6) {
+                        Text("由 \(post.author.username) \(relativeCreatedAtText)发布的漂流瓶")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
+                    .padding(.horizontal, 22)
                 }
-                .foregroundStyle(.primary.opacity(0.74))
-                .padding(.horizontal, 11)
-                .frame(height: 30)
-                .background(.ultraThinMaterial, in: Capsule())
-                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
-    @ViewBuilder
-    private var screenPreview: some View {
-        if let previewUrl = post.previewUrl {
-            CircleCachedPreviewImage(
-                cacheKey: "drift-bottle-" + post.id,
-                url: previewUrl,
-                seed: seed
-            )
-        } else {
-            CircleFeedAbstractArtwork(seed: seed)
+    private var backgroundColors: [Color] {
+        if colorScheme == .dark {
+            return [
+                Color(red: 0.08, green: 0.13, blue: 0.16),
+                Color(red: 0.10, green: 0.20, blue: 0.25),
+                Color(red: 0.05, green: 0.08, blue: 0.10)
+            ]
+        }
+
+        return [
+            Color(red: 0.92, green: 0.98, blue: 0.99),
+            Color(red: 0.80, green: 0.92, blue: 0.96),
+            Color(red: 0.96, green: 0.97, blue: 0.94)
+        ]
+    }
+
+    private var relativeCreatedAtText: String {
+        let seconds = max(0, Int(Date().timeIntervalSince(post.createdAt)))
+        if seconds < 60 { return "刚刚" }
+
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) 分钟前" }
+
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours) 小时前" }
+
+        let days = hours / 24
+        if days < 7 { return "\(days) 天前" }
+
+        let weeks = days / 7
+        if weeks < 5 { return "\(weeks) 周前" }
+
+        let months = days / 30
+        if months < 12 { return "\(months) 个月前" }
+
+        return "\(days / 365) 年前"
+    }
+}
+
+private struct CircleDriftBottleWavePattern: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                ForEach(0..<6, id: \.self) { index in
+                    Path { path in
+                        let y = proxy.size.height * (0.12 + CGFloat(index) * 0.13)
+                        var x: CGFloat = -32
+                        path.move(to: CGPoint(x: x, y: y))
+
+                        while x <= proxy.size.width + 32 {
+                            let nextX = x + 58
+                            let controlY = y + (index.isMultiple(of: 2) ? -12 : 12)
+                            path.addQuadCurve(
+                                to: CGPoint(x: nextX, y: y),
+                                control: CGPoint(x: x + 29, y: controlY)
+                            )
+                            x = nextX
+                        }
+                    }
+                    .stroke(
+                        CircleFeedStyle.driftTint.opacity(max(0.05, 0.17 - Double(index) * 0.018)),
+                        style: StrokeStyle(lineWidth: 1.3, lineCap: .round)
+                    )
+                }
+            }
         }
     }
 }
 
 private struct CircleMasonryColumn: View {
     let posts: [CirclePost]
+    let viewedPostIDs: Set<String>
+    let isImageLoadingEnabled: Bool
     let onTransfer: (CirclePost) -> Void
     let onReport: (CirclePost) -> Void
 
@@ -841,6 +1306,8 @@ private struct CircleMasonryColumn: View {
             ForEach(posts) { post in
                 CirclePostCard(
                     post: post,
+                    isViewed: viewedPostIDs.contains(post.id),
+                    isImageLoadingEnabled: isImageLoadingEnabled,
                     onTransfer: { onTransfer(post) },
                     onReport: { onReport(post) }
                 )
@@ -852,6 +1319,8 @@ private struct CircleMasonryColumn: View {
 
 private struct CirclePostCard: View {
     let post: CirclePost
+    let isViewed: Bool
+    let isImageLoadingEnabled: Bool
     let onTransfer: () -> Void
     let onReport: () -> Void
 
@@ -862,14 +1331,14 @@ private struct CirclePostCard: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(post.title)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isViewed ? Color.secondary : Color.primary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !post.tags.isEmpty {
                     Text(post.tags.prefix(3).map { "#\($0)" }.joined(separator: " "))
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(CircleFeedStyle.tint.opacity(0.85))
+                        .foregroundStyle(isViewed ? Color.secondary.opacity(0.74) : CircleFeedStyle.tint.opacity(0.85))
                         .lineLimit(1)
                 }
 
@@ -910,7 +1379,8 @@ private struct CirclePostCard: View {
                     CircleCachedPreviewImage(
                         cacheKey: post.id,
                         url: previewUrl,
-                        seed: CircleFeedStyle.seed(for: post)
+                        seed: CircleFeedStyle.seed(for: post),
+                        isLoadingEnabled: isImageLoadingEnabled
                     )
                 } else {
                     CircleFeedAbstractArtwork(seed: CircleFeedStyle.seed(for: post))
@@ -928,6 +1398,11 @@ private struct CirclePostCard: View {
                     endPoint: .bottom
                 )
             }
+            .overlay {
+                if isViewed {
+                    Color(.systemGray).opacity(0.18)
+                }
+            }
                 .overlay(alignment: .bottomLeading) {
                     VStack(alignment: .leading, spacing: 4) {
                         Image(systemName: "lock.display")
@@ -939,6 +1414,12 @@ private struct CirclePostCard: View {
                     .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 3)
                     .padding(10)
                 }
+                .overlay(alignment: .topTrailing) {
+                    if isViewed {
+                        CirclePostViewedBadge()
+                            .padding(8)
+                    }
+                }
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
@@ -948,12 +1429,13 @@ private struct CirclePostCard: View {
             CircleAvatarView(
                 username: post.author.username,
                 avatarKey: post.author.avatarKey,
-                avatarUrl: post.author.avatarUrl
+                avatarUrl: post.author.avatarUrl,
+                isImageLoadingEnabled: isImageLoadingEnabled
             )
 
             Text(post.author.username)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isViewed ? Color.secondary.opacity(0.72) : Color.secondary)
                 .lineLimit(1)
 
             Spacer(minLength: 4)
@@ -982,10 +1464,26 @@ private struct CirclePostCard: View {
 
 }
 
+private struct CirclePostViewedBadge: View {
+    var body: some View {
+        Text("已看")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.88))
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(Color(.systemGray2).opacity(0.82), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(Color.white.opacity(0.18), lineWidth: 0.6)
+            }
+    }
+}
+
 private struct CircleCachedPreviewImage: View {
     let cacheKey: String
     let url: URL
     let seed: Int
+    let isLoadingEnabled: Bool
 
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -1006,9 +1504,14 @@ private struct CircleCachedPreviewImage: View {
         .onChange(of: url) { _ in
             loadIfNeeded()
         }
+        .onChange(of: isLoadingEnabled) { enabled in
+            guard enabled else { return }
+            loadIfNeeded()
+        }
     }
 
     private func loadIfNeeded() {
+        guard isLoadingEnabled else { return }
         guard !isLoading else { return }
         isLoading = true
 
@@ -1029,13 +1532,17 @@ private struct CircleCachedPreviewImage: View {
                 guard
                     let httpResponse = response as? HTTPURLResponse,
                     (200..<300).contains(httpResponse.statusCode),
-                    let loadedImage = UIImage(data: data)
+                    let loadedImage = CircleImageDownsampler.image(
+                        from: data,
+                        maxPixelSize: CircleImageDownsampler.previewMaxPixelSize
+                    ) ?? UIImage(data: data)
                 else {
                     await MainActor.run { isLoading = false }
                     return
                 }
 
-                CircleImageDiskCache.shared.set(loadedImage, data: data, for: cacheKey, kind: .preview)
+                let cacheData = loadedImage.jpegData(compressionQuality: 0.82) ?? data
+                CircleImageDiskCache.shared.set(loadedImage, data: cacheData, for: cacheKey, kind: .preview)
                 await MainActor.run {
                     image = loadedImage
                     isLoading = false
@@ -1069,13 +1576,15 @@ private struct CircleServerPreviewImage: View {
 private struct CircleCachedAvatarImage: View {
     let cacheKey: String
     let url: URL
+    let isLoadingEnabled: Bool
 
     @State private var image: UIImage?
     @State private var isLoading = false
 
-    init(cacheKey: String, url: URL) {
+    init(cacheKey: String, url: URL, isLoadingEnabled: Bool) {
         self.cacheKey = cacheKey
         self.url = url
+        self.isLoadingEnabled = isLoadingEnabled
         _image = State(initialValue: CircleImageDiskCache.shared.cachedImage(for: cacheKey, kind: .avatar))
     }
 
@@ -1093,9 +1602,14 @@ private struct CircleCachedAvatarImage: View {
         .onChange(of: url) { _ in
             loadIfNeeded()
         }
+        .onChange(of: isLoadingEnabled) { enabled in
+            guard enabled else { return }
+            loadIfNeeded()
+        }
     }
 
     private func loadIfNeeded() {
+        guard isLoadingEnabled else { return }
         guard !isLoading else { return }
         isLoading = true
 
@@ -1116,13 +1630,17 @@ private struct CircleCachedAvatarImage: View {
                 guard
                     let httpResponse = response as? HTTPURLResponse,
                     (200..<300).contains(httpResponse.statusCode),
-                    let loadedImage = UIImage(data: data)
+                    let loadedImage = CircleImageDownsampler.image(
+                        from: data,
+                        maxPixelSize: CircleImageDownsampler.avatarMaxPixelSize
+                    ) ?? UIImage(data: data)
                 else {
                     await MainActor.run { isLoading = false }
                     return
                 }
 
-                CircleImageDiskCache.shared.set(loadedImage, data: data, for: cacheKey, kind: .avatar)
+                let cacheData = loadedImage.jpegData(compressionQuality: 0.84) ?? data
+                CircleImageDiskCache.shared.set(loadedImage, data: cacheData, for: cacheKey, kind: .avatar)
                 await MainActor.run {
                     image = loadedImage
                     isLoading = false
@@ -1133,6 +1651,25 @@ private struct CircleCachedAvatarImage: View {
                 }
             }
         }
+    }
+}
+
+private enum CircleImageDownsampler {
+    static let previewMaxPixelSize: CGFloat = 720
+    static let avatarMaxPixelSize: CGFloat = 128
+
+    static func image(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize)
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
     }
 }
 
@@ -1158,6 +1695,15 @@ private final class CircleImageDiskCache: @unchecked Sendable {
                 return "preview"
             case .avatar:
                 return "avatar"
+            }
+        }
+
+        var maxPixelSize: CGFloat {
+            switch self {
+            case .preview:
+                return CircleImageDownsampler.previewMaxPixelSize
+            case .avatar:
+                return CircleImageDownsampler.avatarMaxPixelSize
             }
         }
     }
@@ -1198,7 +1744,7 @@ private final class CircleImageDiskCache: @unchecked Sendable {
                 let fileURL = self.fileURL(for: key, kind: kind)
                 guard
                     let data = try? Data(contentsOf: fileURL),
-                    let image = UIImage(data: data)
+                    let image = self.decodedImage(from: data, kind: kind)
                 else {
                     continuation.resume(returning: nil)
                     return
@@ -1220,7 +1766,7 @@ private final class CircleImageDiskCache: @unchecked Sendable {
         let fileURL = fileURL(for: key, kind: kind)
         guard
             let data = try? Data(contentsOf: fileURL),
-            let image = UIImage(data: data)
+            let image = decodedImage(from: data, kind: kind)
         else {
             return nil
         }
@@ -1254,6 +1800,10 @@ private final class CircleImageDiskCache: @unchecked Sendable {
     private func memoryCost(for image: UIImage) -> Int {
         let pixelCount = Int(image.size.width * image.scale * image.size.height * image.scale)
         return pixelCount * 4
+    }
+
+    private func decodedImage(from data: Data, kind: CacheKind) -> UIImage? {
+        CircleImageDownsampler.image(from: data, maxPixelSize: kind.maxPixelSize) ?? UIImage(data: data)
     }
 
     private func memoryKey(for key: String, kind: CacheKind) -> String {
@@ -1379,16 +1929,22 @@ private struct CircleAvatarView: View {
     let username: String
     let avatarKey: String
     let avatarUrl: URL?
+    var size: CGFloat = 20
+    var isImageLoadingEnabled = true
 
     var body: some View {
         ZStack {
             placeholder
 
             if let avatarUrl {
-                CircleCachedAvatarImage(cacheKey: avatarKey, url: avatarUrl)
+                CircleCachedAvatarImage(
+                    cacheKey: avatarKey,
+                    url: avatarUrl,
+                    isLoadingEnabled: isImageLoadingEnabled
+                )
             }
         }
-        .frame(width: 20, height: 20)
+        .frame(width: size, height: size)
         .clipShape(Circle())
     }
 
@@ -1408,7 +1964,7 @@ private struct CircleAvatarView: View {
                 )
 
             Text(initial)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: max(9, size * 0.42), weight: .bold))
                 .foregroundStyle(.white)
         }
     }

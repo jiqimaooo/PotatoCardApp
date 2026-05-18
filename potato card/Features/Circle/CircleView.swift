@@ -17,6 +17,7 @@ struct CircleView: View {
     @State private var publishStatusState: CirclePublishStatusToast.StateStyle = .posting
     @State private var isPublishStatusVisible = false
     @State private var selectedFeedSection: FeedSection = .discover
+    @State private var viewedPostIDs: Set<String> = []
     @State private var isHeaderHidden = false
     @State private var lastFeedScrollOffset: CGFloat = 0
     @State private var circleImageViewerRequest: CircleImageViewerRequest?
@@ -42,6 +43,10 @@ struct CircleView: View {
                 return "漂流瓶"
             }
         }
+
+        var index: Int {
+            Self.allCases.firstIndex(of: self) ?? 0
+        }
     }
 
     private var sessionAPIClient: CircleAPIClient {
@@ -58,6 +63,11 @@ struct CircleView: View {
         Group {
             if sessionStore.isRegistered {
                 ZStack(alignment: .bottom) {
+                    if selectedFeedSection == .driftBottle {
+                        CircleDriftBottleOceanBackdrop()
+                            .ignoresSafeArea()
+                    }
+
                     VStack(alignment: .leading, spacing: 0) {
                         if !isHeaderHidden {
                             header
@@ -106,10 +116,12 @@ struct CircleView: View {
         }
         .onAppear {
             sessionStore.loadFromStorage()
+            loadViewedPostIDs()
             loadPostsIfNeeded()
         }
         .onChange(of: sessionStore.isRegistered) { isRegistered in
             guard isRegistered else { return }
+            loadViewedPostIDs()
             loadPostsIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: CircleSessionStore.didSignOutNotification)) { _ in
@@ -120,6 +132,7 @@ struct CircleView: View {
             isDriftBottleThrowPresented = false
             hasCompletedInitialPostsLoad = false
             selectedFeedSection = .discover
+            viewedPostIDs = []
             resetFeedHeaderVisibility()
             sessionStore.loadFromStorage()
         }
@@ -154,7 +167,7 @@ struct CircleView: View {
                     )
                 },
                 isContentLocked: true,
-                lockedPreviewText: "点击传输以查看",
+                lockedPreviewText: request.lockedPreviewText,
                 transferButtonTitle: "传输到设备解锁原图"
             )
             .presentationDetents([.height(560)])
@@ -173,14 +186,16 @@ struct CircleView: View {
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 8)
-        .background(Color(.systemBackground))
+        .background(headerBackgroundColor)
+    }
+
+    private var headerBackgroundColor: Color {
+        selectedFeedSection == .driftBottle ? .clear : Color(.systemBackground)
     }
 
     private func feedTab(_ section: FeedSection) -> some View {
         Button {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
-                selectedFeedSection = section
-            }
+            selectFeedSection(section)
         } label: {
             CircleFeedTab(title: section.title, isSelected: selectedFeedSection == section)
         }
@@ -208,17 +223,14 @@ struct CircleView: View {
 
     @ViewBuilder
     private var feedPager: some View {
-        TabView(selection: $selectedFeedSection) {
-            ForEach(FeedSection.allCases, id: \.self) { section in
-                feedPageContent(for: section)
-                    .tag(section)
+        feedPageContent(for: selectedFeedSection)
+            .id(selectedFeedSection)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .simultaneousGesture(feedSectionSwipeGesture)
+            .onChange(of: selectedFeedSection) { section in
+                handleSelectedFeedSectionChange(section)
             }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: selectedFeedSection) { section in
-            handleSelectedFeedSectionChange(section)
-        }
     }
 
     @ViewBuilder
@@ -227,6 +239,8 @@ struct CircleView: View {
         case .discover:
             CircleFeedView(
                 posts: posts,
+                viewedPostIDs: viewedPostIDs,
+                isImageLoadingEnabled: selectedFeedSection == section,
                 onTransfer: openTransferSheet,
                 onReport: handleReport,
                 onRefresh: refreshPosts,
@@ -237,6 +251,8 @@ struct CircleView: View {
         case .latest:
             CircleFeedView(
                 posts: latestPosts,
+                viewedPostIDs: viewedPostIDs,
+                isImageLoadingEnabled: selectedFeedSection == section,
                 onTransfer: openTransferSheet,
                 onReport: handleReport,
                 onRefresh: refreshPosts,
@@ -245,7 +261,7 @@ struct CircleView: View {
         case .driftBottle:
             CircleDriftBottleView(
                 posts: posts,
-                onTransfer: openTransferSheet,
+                onTransfer: openDriftBottleTransferSheet,
                 onThrow: {
                     isDriftBottleThrowPresented = true
                 },
@@ -257,8 +273,34 @@ struct CircleView: View {
 
     private func handleSelectedFeedSectionChange(_ section: FeedSection) {
         resetFeedHeaderVisibility()
-        if section == .following {
-            showToast("暂未开放，敬请期待", style: .info)
+    }
+
+    private var feedSectionSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 28, coordinateSpace: .local)
+            .onEnded { value in
+                let horizontalDistance = value.translation.width
+                let verticalDistance = value.translation.height
+                guard abs(horizontalDistance) > 54 else { return }
+                guard abs(horizontalDistance) > abs(verticalDistance) * 1.2 else { return }
+
+                if horizontalDistance < 0 {
+                    selectAdjacentFeedSection(offset: 1)
+                } else {
+                    selectAdjacentFeedSection(offset: -1)
+                }
+            }
+    }
+
+    private func selectAdjacentFeedSection(offset: Int) {
+        let nextIndex = selectedFeedSection.index + offset
+        guard FeedSection.allCases.indices.contains(nextIndex) else { return }
+        selectFeedSection(FeedSection.allCases[nextIndex])
+    }
+
+    private func selectFeedSection(_ section: FeedSection) {
+        guard selectedFeedSection != section else { return }
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
+            selectedFeedSection = section
         }
     }
 
@@ -291,7 +333,7 @@ struct CircleView: View {
                 .accessibilityLabel("发布作品")
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 24)
+            .padding(.bottom, 112)
         }
         .allowsHitTesting(true)
     }
@@ -397,19 +439,44 @@ struct CircleView: View {
     }
 
     private func openTransferSheet(_ post: CirclePost) {
+        markPostViewed(post)
+        presentTransferSheet(
+            for: post,
+            previewImage: lockedTransferPreviewImage(for: post),
+            title: post.title,
+            lockedPreviewText: "点击传输以查看"
+        )
+    }
+
+    private func openDriftBottleTransferSheet(_ post: CirclePost) {
+        markPostViewed(post)
+        presentTransferSheet(
+            for: post,
+            previewImage: blankLockedTransferPreviewImage(for: post),
+            title: "漂流瓶",
+            lockedPreviewText: "传输后才能查看"
+        )
+    }
+
+    private func presentTransferSheet(
+        for post: CirclePost,
+        previewImage: UIImage,
+        title: String,
+        lockedPreviewText: String
+    ) {
         guard !isTransferBusy else {
             showToast(BleTransferError.transferBusy.localizedDescription, style: .error)
             return
         }
-        let previewImage = lockedTransferPreviewImage(for: post)
         circleImageViewerRequest = CircleImageViewerRequest(
             post: post,
             photo: GalleryPhoto(
                 id: UUID(),
                 imageData: encodedImageData(for: previewImage),
                 image: previewImage,
-                title: post.title
-            )
+                title: title
+            ),
+            lockedPreviewText: lockedPreviewText
         )
     }
 
@@ -446,6 +513,19 @@ struct CircleView: View {
         }
     }
 
+    private func blankLockedTransferPreviewImage(for post: CirclePost) -> UIImage {
+        let imageSize = CGSize(
+            width: max(360, post.targetWidth ?? post.previewWidth ?? 720),
+            height: max(520, post.targetHeight ?? post.previewHeight ?? 1080)
+        )
+        let renderer = UIGraphicsImageRenderer(size: imageSize)
+
+        return renderer.image { context in
+            UIColor(red: 0.36, green: 0.39, blue: 0.42, alpha: 1).setFill()
+            context.fill(CGRect(origin: .zero, size: imageSize))
+        }
+    }
+
     private func lockedPreviewColors(for seedText: String) -> [UIColor] {
         let palettes: [[UIColor]] = [
             [UIColor(red: 0.20, green: 0.29, blue: 0.36, alpha: 1), UIColor(red: 0.43, green: 0.48, blue: 0.57, alpha: 1), UIColor(red: 0.12, green: 0.18, blue: 0.24, alpha: 1)],
@@ -466,6 +546,21 @@ struct CircleView: View {
 
     private func handleReport(_ post: CirclePost) {
         showToast("已提交举报：\(post.title)", style: .success)
+    }
+
+    private func loadViewedPostIDs() {
+        guard let userID = sessionStore.profile?.id else {
+            viewedPostIDs = []
+            return
+        }
+        viewedPostIDs = CircleViewedPostStore.shared.loadViewedPostIDs(for: userID)
+    }
+
+    private func markPostViewed(_ post: CirclePost) {
+        guard let userID = sessionStore.profile?.id else { return }
+        guard !viewedPostIDs.contains(post.id) else { return }
+        viewedPostIDs.insert(post.id)
+        CircleViewedPostStore.shared.saveViewedPostIDs(viewedPostIDs, for: userID)
     }
 
     private func loadPostsIfNeeded() {
@@ -682,6 +777,7 @@ private struct CircleImageViewerRequest: Identifiable {
     let id = UUID()
     let post: CirclePost
     let photo: GalleryPhoto
+    let lockedPreviewText: String
 }
 
 private final class CircleFeedPostCache {
@@ -897,6 +993,27 @@ private struct CirclePublishStatusToast: View {
         case .failed:
             return .red
         }
+    }
+}
+
+private final class CircleViewedPostStore {
+    static let shared = CircleViewedPostStore()
+
+    private let defaults = UserDefaults.standard
+    private let maxStoredCount = 2_000
+
+    private init() {}
+
+    func loadViewedPostIDs(for userID: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: key(for: userID)) ?? [])
+    }
+
+    func saveViewedPostIDs(_ ids: Set<String>, for userID: String) {
+        defaults.set(Array(ids.prefix(maxStoredCount)), forKey: key(for: userID))
+    }
+
+    private func key(for userID: String) -> String {
+        "CircleViewedPostIDs.\(userID)"
     }
 }
 

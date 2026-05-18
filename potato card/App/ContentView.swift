@@ -75,6 +75,7 @@ struct ContentView: View {
                 .tag(Tab.skills)
         }
         .tint(accentColor)
+        .toolbarBackground(selectedTab == .circle ? .hidden : .automatic, for: .tabBar)
         .overlay(alignment: .bottom) {
             proximityConnectionCard
         }
@@ -85,6 +86,7 @@ struct ContentView: View {
                 .presentationDragIndicator(.visible)
         }
         .onAppear {
+            configureTabBarAppearance(for: selectedTab)
             beginInitialAutoScanIfNeeded()
             loadTransferredPhotoImage()
             scheduleSafeTabPrewarmIfNeeded()
@@ -92,6 +94,7 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { tab in
             loadedTabs.insert(tab)
+            configureTabBarAppearance(for: tab)
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -118,10 +121,56 @@ struct ContentView: View {
         }
     }
 
+    private func configureTabBarAppearance(for tab: Tab) {
+        let isCircleTab = tab == .circle
+        let appearance = UITabBarAppearance()
+
+        if isCircleTab {
+            appearance.configureWithTransparentBackground()
+            appearance.backgroundColor = .clear
+            appearance.backgroundEffect = nil
+            appearance.shadowColor = .clear
+            appearance.shadowImage = UIImage()
+        } else {
+            appearance.configureWithDefaultBackground()
+        }
+
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+        UITabBar.appearance().isTranslucent = isCircleTab
+
+        updateExistingTabBars(appearance: appearance, isTransparent: isCircleTab)
+    }
+
+    private func updateExistingTabBars(appearance: UITabBarAppearance, isTransparent: Bool) {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                applyTabBarAppearance(in: window, appearance: appearance, isTransparent: isTransparent)
+            }
+        }
+    }
+
+    private func applyTabBarAppearance(in view: UIView, appearance: UITabBarAppearance, isTransparent: Bool) {
+        if let tabBar = view as? UITabBar {
+            tabBar.standardAppearance = appearance
+            tabBar.scrollEdgeAppearance = appearance
+            tabBar.isTranslucent = isTransparent
+            tabBar.backgroundImage = isTransparent ? UIImage() : nil
+            tabBar.shadowImage = isTransparent ? UIImage() : nil
+            tabBar.backgroundColor = isTransparent ? .clear : nil
+            tabBar.setNeedsLayout()
+        }
+
+        for subview in view.subviews {
+            applyTabBarAppearance(in: subview, appearance: appearance, isTransparent: isTransparent)
+        }
+    }
+
     private var homeTab: some View {
         NavigationStack {
             ZStack {
-                backgroundColor
+                homeBackgroundColor
                     .ignoresSafeArea()
 
                 ScrollView(.vertical, showsIndicators: false) {
@@ -163,6 +212,7 @@ struct ContentView: View {
                     .ignoresSafeArea()
 
                 CircleView()
+                    .ignoresSafeArea(.container, edges: .bottom)
             }
             .toolbar(.hidden, for: .navigationBar)
         }
@@ -446,6 +496,10 @@ struct ContentView: View {
 
     private var backgroundColor: Color {
         colorScheme == .dark ? Color(red: 0.07, green: 0.07, blue: 0.08) : .white
+    }
+
+    private var homeBackgroundColor: Color {
+        colorScheme == .dark ? .black : .white
     }
 
     private var transferredAlbum: String? {
