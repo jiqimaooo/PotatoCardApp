@@ -857,11 +857,7 @@ private struct CirclePostCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: onTransfer) {
-                lockedPreview
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("传输 \(post.title)")
+            lockedPreview
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(post.title)
@@ -877,20 +873,7 @@ private struct CirclePostCard: View {
                         .lineLimit(1)
                 }
 
-                HStack(spacing: 6) {
-                    CircleAvatarView(
-                        username: post.author.username,
-                        avatarKey: post.author.avatarKey,
-                        avatarUrl: post.author.avatarUrl
-                    )
-
-                    Text(post.author.username)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 4)
-                }
+                authorAndTransferRow
 
             }
             .padding(.horizontal, 8)
@@ -903,6 +886,12 @@ private struct CirclePostCard: View {
                 .stroke(CircleFeedStyle.hairline, lineWidth: 0.5)
         }
         .frame(maxWidth: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contextMenu {
+            Button(role: .destructive, action: onReport) {
+                Label("举报", systemImage: "exclamationmark.bubble")
+            }
+        }
     }
 
     private var lockedPreview: some View {
@@ -950,8 +939,45 @@ private struct CirclePostCard: View {
                     .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 3)
                     .padding(10)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+    }
+
+    private var authorAndTransferRow: some View {
+        HStack(spacing: 6) {
+            CircleAvatarView(
+                username: post.author.username,
+                avatarKey: post.author.avatarKey,
+                avatarUrl: post.author.avatarUrl
+            )
+
+            Text(post.author.username)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            transferTextButton
+        }
+    }
+
+    private var transferTextButton: some View {
+        Button(action: onTransfer) {
+            Label("传输", systemImage: "paperplane.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(CircleFeedStyle.tint)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(CircleFeedStyle.tint.opacity(0.10), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(CircleFeedStyle.tint.opacity(0.18), lineWidth: 0.7)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("传输 \(post.title)")
     }
 
 }

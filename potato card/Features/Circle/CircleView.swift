@@ -178,10 +178,8 @@ struct CircleView: View {
 
     private func feedTab(_ section: FeedSection) -> some View {
         Button {
-            resetFeedHeaderVisibility()
-            selectedFeedSection = section
-            if section == .following {
-                showToast("暂未开放，敬请期待", style: .info)
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
+                selectedFeedSection = section
             }
         } label: {
             CircleFeedTab(title: section.title, isSelected: selectedFeedSection == section)
@@ -197,7 +195,7 @@ struct CircleView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ZStack(alignment: .top) {
-                selectedFeedContent
+                feedPager
 
                 if shouldShowTopLoading {
                     CircleFeedTopLoadingView()
@@ -209,8 +207,23 @@ struct CircleView: View {
     }
 
     @ViewBuilder
-    private var selectedFeedContent: some View {
-        switch selectedFeedSection {
+    private var feedPager: some View {
+        TabView(selection: $selectedFeedSection) {
+            ForEach(FeedSection.allCases, id: \.self) { section in
+                feedPageContent(for: section)
+                    .tag(section)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: selectedFeedSection) { section in
+            handleSelectedFeedSectionChange(section)
+        }
+    }
+
+    @ViewBuilder
+    private func feedPageContent(for section: FeedSection) -> some View {
+        switch section {
         case .discover:
             CircleFeedView(
                 posts: posts,
@@ -239,6 +252,13 @@ struct CircleView: View {
                 onRefresh: refreshPosts,
                 onScrollOffsetChange: handleFeedScrollOffset
             )
+        }
+    }
+
+    private func handleSelectedFeedSectionChange(_ section: FeedSection) {
+        resetFeedHeaderVisibility()
+        if section == .following {
+            showToast("暂未开放，敬请期待", style: .info)
         }
     }
 
