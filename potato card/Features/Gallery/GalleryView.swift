@@ -514,8 +514,10 @@ struct GalleryImageViewer: View {
         }
         // 同一张 sheet 用 .height(560) ↔ .large 两个 detent，
         // 把「全屏编辑」做成原生交互：上拉 = 进入编辑，下拉 = 回到预览。
+        // 传输进行中只保留小尺寸，禁止用户在传输途中再进入编辑（编辑会改写
+        // TransferEditStateStore，让正在传的图与刚保存的状态不一致）。
         .presentationDetents(
-            isContentLocked ? [.height(560)] : [.height(560), .large],
+            (isContentLocked || isTransferInProgress) ? [.height(560)] : [.height(560), .large],
             selection: $selectedDetent
         )
         .presentationDragIndicator(.visible)
@@ -747,6 +749,16 @@ struct GalleryImageViewer: View {
     private func transferSelectedPhotoDirectly() {
         guard !isTransferInProgress, let device = activeDevice else { return }
 
+        // 用户在编辑态点了「传输到设备」时：
+        // 1) 把 draft 先写回 TransferEditStateStore，下面 startTransfer 里
+        //    读 saved 才能拿到刚刚的编辑（之前 .large 状态下读到的是旧值，
+        //    所以传出去的是原图）。
+        // 2) 顺手收起 sheet，传输过程中不需要再呆在全屏编辑模式里。
+        if isExpanded {
+            persistDraftIfNeeded()
+            selectedDetent = .height(560)
+        }
+
         let photo = photos[selectedIndex]
         transferPreparationError = nil
 
@@ -774,10 +786,15 @@ struct GalleryImageViewer: View {
     }
 
     private func startTransfer(image: UIImage, imageData: Data, device: BleDevice, photo: GalleryPhoto) {
-        // 传输这张照片时默认也要使用用户保存过的“手动调整”，跟预览保持一致。
-        let savedAdjustment = TransferEditStateStore.load(for: editStateKeyForPhoto(photo))
-        let adjustment = savedAdjustment ?? .default
-        let fitMode: EInkImageFitMode = (savedAdjustment != nil && adjustment != .default) ? .manual : .centerCrop
+        // 优先用 in-memory draftAdjustment（如果它跟当前选中的是同一张）：
+        // 用户刚在 .large 编辑、还没等 onChange 写回 storage 的瞬间也能拿到正确值。
+        let adjustment: EInkManualAdjustment = {
+            if photos.indices.contains(selectedIndex), photo.id == photos[selectedIndex].id {
+                return draftAdjustment
+            }
+            return TransferEditStateStore.load(for: editStateKeyForPhoto(photo)) ?? .default
+        }()
+        let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
         let transferImage = transferImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
         let displayImage = displayImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
         pendingTransferData = imageData

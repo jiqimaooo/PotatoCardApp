@@ -234,7 +234,11 @@ private struct AlbumImageViewer: View {
                 }
             }
         }
-        .presentationDetents([.height(560), .large], selection: $selectedDetent)
+        // 传输进行中只保留小尺寸，禁止再次进入编辑——避免与正在传输的图状态不一致。
+        .presentationDetents(
+            isTransferInProgress ? [.height(560)] : [.height(560), .large],
+            selection: $selectedDetent
+        )
         .presentationDragIndicator(.visible)
         .presentationContentInteraction(.scrolls)
     }
@@ -331,11 +335,16 @@ private struct AlbumImageViewer: View {
             return
         }
 
-        // 走与 GalleryImageViewer 同款的「读取保存调整」逻辑：用户编辑保存后，
-        // 后续点「传输到设备」自动应用，无需再次编辑。
-        let savedAdjustment = TransferEditStateStore.load(for: .album(albums[selectedIndex]))
-        let adjustment = savedAdjustment ?? .default
-        let fitMode: EInkImageFitMode = (savedAdjustment != nil && adjustment != .default) ? .manual : .centerCrop
+        // 编辑态点了传输：先把 draft 写回 storage 并收起 sheet，
+        // 否则下面读 saved 还是上一次保存的值，传出去就是「原图」。
+        if isExpanded {
+            persistDraftIfNeeded()
+            selectedDetent = .height(560)
+        }
+
+        // 当前选中那张优先用 in-memory draft，避免 onChange 异步还没写回 storage 的瞬间漏掉。
+        let adjustment = draftAdjustment
+        let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
 
         let transferImage = EInkImageRenderer.renderForTransfer(
             image: image,
