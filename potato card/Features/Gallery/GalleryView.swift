@@ -15,6 +15,12 @@ struct GalleryView: View {
     @State private var photos: [GalleryPhoto] = []
     @State private var selectedPhotoSet: SelectedPhotoSet?
     @State private var isImporting = false
+    // 长按缩略图弹出的「手动调整」入口走的独立 sheet。复用 TransferSheetView，
+    // 与一级页面的手动调整完全一致，省去用户先打开预览再点按钮的两步流程。
+    @State private var adjustingPhoto: GalleryPhoto?
+    // 长按缩略图触发的「分享到圈子 / 漂流瓶」入口。
+    @State private var shareDestination: GalleryShareDestination?
+    @State private var shareToast: String?
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 3),
@@ -55,6 +61,57 @@ struct GalleryView: View {
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
         }
+        .sheet(item: $adjustingPhoto) { photo in
+            // 长按 → 调整：直接打开二级手动调整面板，与一级页面用的是同一个组件。
+            TransferSheetView(
+                sourceImage: photo.image,
+                title: photo.title,
+                editStateKey: .gallery(photo.id),
+                onTransferSucceeded: {
+                    onTransferToDevice(photo.imageData)
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $shareDestination) { destination in
+            GalleryShareSheet(
+                destination: destination,
+                onPublishSucceeded: { dest in
+                    let title: String = {
+                        switch dest {
+                        case .circle: return "已发布到圈子"
+                        case .driftBottle: return "漂流瓶已扔进海里"
+                        }
+                    }()
+                    shareToast = title
+                },
+                onPublishFailed: { message in
+                    shareToast = "分享失败：\(message)"
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .overlay(alignment: .top) {
+            if let shareToast {
+                Text(shareToast)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task {
+                        try? await Task.sleep(nanoseconds: 1_800_000_000)
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            self.shareToast = nil
+                        }
+                    }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: shareToast)
     }
 
     private var header: some View {
@@ -115,10 +172,32 @@ struct GalleryView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button(role: .destructive) {
-                            deletePhoto(photo)
+                        Button {
+                            adjustingPhoto = photo
                         } label: {
-                            Label("删除", systemImage: "trash")
+                            Label("调整", systemImage: "slider.horizontal.3")
+                        }
+
+                        Section("分享") {
+                            Button {
+                                shareDestination = .circle(photo: photo)
+                            } label: {
+                                Label("分享到圈子", systemImage: "person.2.circle")
+                            }
+
+                            Button {
+                                shareDestination = .driftBottle(photo: photo)
+                            } label: {
+                                Label("分享到漂流瓶", systemImage: "paperplane")
+                            }
+                        }
+
+                        Section {
+                            Button(role: .destructive) {
+                                deletePhoto(photo)
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -284,6 +363,10 @@ struct GalleryImageViewer: View {
     @State private var customizedPhotoIDs: Set<UUID> = []
     // 在 sheet 里修改过名称后本地缓存，只读走外层 photos 会丢掉变更。
     @State private var renamedTitles: [UUID: String] = [:]
+    // 当前向上滑的累计位移，用来给底部胶囊一个跟手的反馈动画。
+    @State private var swipeUpDragOffset: CGFloat = 0
+    // 阈值：累计向上拖到 -56pt 之后松手即触发手动调整面板。
+    private let swipeUpTriggerThreshold: CGFloat = 56
 
     init(
         photos: [GalleryPhoto],
@@ -346,9 +429,20 @@ struct GalleryImageViewer: View {
                             .tint(currentPhotoIsCustomized ? .yellow : .secondary)
                             .disabled(isTransferInProgress)
                         }
+
+                        if !isContentLocked {
+                            swipeUpHintBar
+                                .padding(.top, 2)
+                        }
                     }
                     .padding(.bottom, isContentLocked ? 28 : 10)
-                    .offset(y: isContentLocked ? 0 : 20)
+                    .offset(y: (isContentLocked ? 0 : 20) - max(0, -swipeUpDragOffset) * 0.18)
+                }
+                .contentShape(Rectangle())
+                .simultaneousGesture(isContentLocked ? nil : swipeUpGesture)
+                .accessibilityAction(named: "进入手动调整") {
+                    guard !isContentLocked, !isTransferInProgress else { return }
+                    openManualAdjustment()
                 }
             }
             .sheet(item: $transferRequest) { request in
@@ -577,7 +671,68 @@ struct GalleryImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: isContentLocked ? -14 : -60)
+        .offset(y: (isContentLocked ? -14 : -60) - max(0, -swipeUpDragOffset) * 0.25)
+    }
+
+    // 底部「上滑进入手动调整」的提示胶囊。跟手拖动时会渐显并轻微跟随手指上浮，
+    // 触发后随 sheet 弹起的 spring 动画自然回落。
+    @ViewBuilder
+    private var swipeUpHintBar: some View {
+        let progress = min(1, max(0, -swipeUpDragOffset / swipeUpTriggerThreshold))
+        let isArmed = progress >= 1
+        HStack(spacing: 6) {
+            Image(systemName: isArmed ? "slider.horizontal.3" : "chevron.up")
+                .font(.system(size: 11, weight: .semibold))
+            Text(isArmed ? "松手进入手动调整" : "上滑进入手动调整")
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .opacity(0.55 + 0.35 * progress)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color.primary.opacity(0.04 + 0.05 * progress))
+        )
+        .scaleEffect(1 + 0.04 * progress)
+        .animation(.easeOut(duration: 0.18), value: isArmed)
+        .accessibilityHint("从底部向上滑动，或点上方按钮，进入手动调整页面")
+    }
+
+    // 主预览底部的上滑手势：只在向上拖动时收集累计位移，松手到达阈值则打开调整面板。
+    // 用 simultaneousGesture 接入，确保不会抢掉 sheet 自带的下滑关闭手势。
+    private var swipeUpGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .onChanged { value in
+                let dy = value.translation.height
+                // 只跟踪向上方向，向下交还给系统的 sheet dismiss 手势。
+                guard dy <= 0 else {
+                    if swipeUpDragOffset != 0 {
+                        withAnimation(.interactiveSpring()) {
+                            swipeUpDragOffset = 0
+                        }
+                    }
+                    return
+                }
+                // 引入 rubber-band：超过阈值后位移衰减，让 hint 有“顶到头”的反馈。
+                let raw = dy
+                let damped = raw < -swipeUpTriggerThreshold
+                    ? -swipeUpTriggerThreshold + (raw + swipeUpTriggerThreshold) * 0.35
+                    : raw
+                swipeUpDragOffset = damped
+            }
+            .onEnded { value in
+                let shouldTrigger = -swipeUpDragOffset >= swipeUpTriggerThreshold
+                    || value.predictedEndTranslation.height <= -swipeUpTriggerThreshold * 1.2
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    swipeUpDragOffset = 0
+                }
+                if shouldTrigger, !isTransferInProgress {
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    openManualAdjustment()
+                }
+            }
     }
 
     private var renderTargetSize: CGSize {

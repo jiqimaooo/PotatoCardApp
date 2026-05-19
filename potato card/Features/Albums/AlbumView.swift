@@ -149,6 +149,9 @@ private struct AlbumImageViewer: View {
     @State private var transferRequest: AlbumTransferRequest?
     @State private var pendingTransferAlbum: String?
     @State private var pendingTransferImage: UIImage?
+    // 与 GalleryImageViewer 一致的上滑进入手动调整动画状态。
+    @State private var swipeUpDragOffset: CGFloat = 0
+    private let swipeUpTriggerThreshold: CGFloat = 56
 
     init(albums: [String], initialIndex: Int, onTransferToDevice: @escaping (String) -> Void) {
         self.albums = albums
@@ -186,9 +189,18 @@ private struct AlbumImageViewer: View {
                         .controlSize(.regular)
                         .tint(.secondary)
                         .disabled(isTransferInProgress)
+
+                        swipeUpHintBar
+                            .padding(.top, 2)
                     }
                     .padding(.bottom, 10)
-                    .offset(y: 20)
+                    .offset(y: 20 - max(0, -swipeUpDragOffset) * 0.18)
+                }
+                .contentShape(Rectangle())
+                .simultaneousGesture(swipeUpGesture)
+                .accessibilityAction(named: "进入手动调整") {
+                    guard !isTransferInProgress else { return }
+                    openManualAdjustment()
                 }
             }
             .sheet(item: $transferRequest) { request in
@@ -347,7 +359,61 @@ private struct AlbumImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: -60)
+        .offset(y: -60 - max(0, -swipeUpDragOffset) * 0.25)
+    }
+
+    // 底部「上滑进入手动调整」的提示胶囊，几何 / 文案与 GalleryImageViewer 保持一致。
+    @ViewBuilder
+    private var swipeUpHintBar: some View {
+        let progress = min(1, max(0, -swipeUpDragOffset / swipeUpTriggerThreshold))
+        let isArmed = progress >= 1
+        HStack(spacing: 6) {
+            Image(systemName: isArmed ? "slider.horizontal.3" : "chevron.up")
+                .font(.system(size: 11, weight: .semibold))
+            Text(isArmed ? "松手进入手动调整" : "上滑进入手动调整")
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .opacity(0.55 + 0.35 * progress)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color.primary.opacity(0.04 + 0.05 * progress))
+        )
+        .scaleEffect(1 + 0.04 * progress)
+        .animation(.easeOut(duration: 0.18), value: isArmed)
+    }
+
+    private var swipeUpGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .onChanged { value in
+                let dy = value.translation.height
+                guard dy <= 0 else {
+                    if swipeUpDragOffset != 0 {
+                        withAnimation(.interactiveSpring()) {
+                            swipeUpDragOffset = 0
+                        }
+                    }
+                    return
+                }
+                let damped = dy < -swipeUpTriggerThreshold
+                    ? -swipeUpTriggerThreshold + (dy + swipeUpTriggerThreshold) * 0.35
+                    : dy
+                swipeUpDragOffset = damped
+            }
+            .onEnded { value in
+                let shouldTrigger = -swipeUpDragOffset >= swipeUpTriggerThreshold
+                    || value.predictedEndTranslation.height <= -swipeUpTriggerThreshold * 1.2
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    swipeUpDragOffset = 0
+                }
+                if shouldTrigger, !isTransferInProgress {
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    openManualAdjustment()
+                }
+            }
     }
 
     private func albumScreenImage(_ album: String) -> some View {
