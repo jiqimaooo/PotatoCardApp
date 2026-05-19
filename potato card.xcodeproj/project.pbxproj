@@ -37,6 +37,8 @@
 /* Begin PBXFileReference section */
 		A86A54262F894613001EC8F6 /* potato card.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "potato card.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1A000000000000000000002 /* TransferLiveActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TransferLiveActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.shared.xcconfig; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000002 /* Signing.local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.local.example.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -99,8 +101,18 @@
 			children = (
 				A86A54282F894613001EC8F6 /* potato card */,
 				B1A000000000000000000003 /* TransferLiveActivityWidget */,
+				C0DEC0DE0000000000000003 /* Config */,
 				A86A54272F894613001EC8F6 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		C0DEC0DE0000000000000003 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */,
+				C0DEC0DE0000000000000002 /* Signing.local.example.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		A86A54272F894613001EC8F6 /* Products */ = {
@@ -363,13 +375,14 @@
 		};
 		A86A54322F894615001EC8F6 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "potato card/PotatoCard.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 22;
-				DEVELOPMENT_TEAM = BK368UYPY3;
+				DEVELOPMENT_TEAM = "$(POTATO_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -384,9 +397,6 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;
@@ -403,7 +413,7 @@
 					"-framework",
 					HealthKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -418,13 +428,14 @@
 		};
 		A86A54332F894615001EC8F6 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "potato card/PotatoCard.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 22;
-				DEVELOPMENT_TEAM = BK368UYPY3;
+				DEVELOPMENT_TEAM = "$(POTATO_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -439,9 +450,6 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
-					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;
@@ -458,7 +466,7 @@
 					"-framework",
 					HealthKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -473,12 +481,13 @@
 		};
 		A8C60A312FA70F0D0068FCDB /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 22;
-				DEVELOPMENT_TEAM = BK368UYPY3;
+				DEVELOPMENT_TEAM = "$(POTATO_DEVELOPMENT_TEAM)";
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -490,7 +499,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app.transfer-live-activity-widget;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(WIDGET_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -505,13 +514,14 @@
 		};
 		A8C60A322FA70F0D0068FCDB /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = YES;
 				CURRENT_PROJECT_VERSION = 22;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = BK368UYPY3;
+				DEVELOPMENT_TEAM = "$(POTATO_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TransferLiveActivityWidget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.5;
@@ -521,7 +531,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunbelife.potatocard.app.transfer-live-activity-widget;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(WIDGET_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
