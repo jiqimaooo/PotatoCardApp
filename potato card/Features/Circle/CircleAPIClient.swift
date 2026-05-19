@@ -126,6 +126,26 @@ struct CircleAPIClient {
         _ = try await perform(request)
     }
 
+    func createDriftBottle(imageData: Data, accessToken: String? = nil) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/drift-bottles"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = imageOnlyMultipartBody(boundary: boundary, imageData: imageData)
+        _ = try await perform(request)
+    }
+
+    func drawDriftBottle(accessToken: String? = nil) async throws -> CircleDriftBottleDrawResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/drift-bottles/draw"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        let data = try await perform(request)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(CircleDriftBottleDrawResponse.self, from: data)
+    }
+
     func downloadTransferImage(from url: URL) async throws -> UIImage {
         let (data, response) = try await urlSession.data(from: url)
         guard let http = response as? HTTPURLResponse else { throw CircleAPIError.invalidResponse }
@@ -175,6 +195,16 @@ struct CircleAPIClient {
         var data = Data()
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
         data.append("Content-Disposition: form-data; name=\"image\"; filename=\"avatar.jpg\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        data.append(imageData)
+        data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        return data
+    }
+
+    private func imageOnlyMultipartBody(boundary: String, imageData: Data) -> Data {
+        var data = Data()
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"drift-bottle.jpg\"\r\n".data(using: .utf8)!)
         data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
         data.append(imageData)
         data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)

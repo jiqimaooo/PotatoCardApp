@@ -18,6 +18,10 @@ struct CircleView: View {
     @State private var isPublishStatusVisible = false
     @State private var selectedFeedSection: FeedSection = .discover
     @State private var viewedPostIDs: Set<String> = []
+    @State private var driftBottlePost: CirclePost?
+    @State private var isDrawingDriftBottle = false
+    @State private var driftBottleRemainingDraws: Int?
+    @State private var driftBottleDailyLimit: Int?
     @State private var isHeaderHidden = false
     @State private var lastFeedScrollOffset: CGFloat = 0
     @State private var circleImageViewerRequest: CircleImageViewerRequest?
@@ -131,6 +135,10 @@ struct CircleView: View {
             isPublishStatusVisible = false
             isComposerPresented = false
             isDriftBottleThrowPresented = false
+            driftBottlePost = nil
+            isDrawingDriftBottle = false
+            driftBottleRemainingDraws = nil
+            driftBottleDailyLimit = nil
             hasCompletedInitialPostsLoad = false
             selectedFeedSection = .discover
             viewedPostIDs = []
@@ -261,12 +269,15 @@ struct CircleView: View {
             )
         case .driftBottle:
             CircleDriftBottleView(
-                posts: posts,
+                post: driftBottlePost,
+                isDrawing: isDrawingDriftBottle,
+                remainingDrawCount: driftBottleRemainingDraws,
+                dailyDrawLimit: driftBottleDailyLimit,
                 onTransfer: openDriftBottleTransferSheet,
                 onThrow: {
                     isDriftBottleThrowPresented = true
                 },
-                onRefresh: refreshPosts,
+                onDraw: drawDriftBottle,
                 onScrollOffsetChange: handleFeedScrollOffset
             )
         }
@@ -609,7 +620,19 @@ struct CircleView: View {
     }
 
     private func publishDriftBottle(imageData: Data) {
-        publish(imageData: imageData, title: "漂流瓶", tags: [])
+        showPublishStatus(.posting)
+        Task {
+            do {
+                try await createDriftBottleWithRefresh(imageData: imageData)
+                showPublishStatus(.succeeded)
+                showToast("漂流瓶已扔进海里", style: .success)
+                hidePublishStatus(after: 2)
+            } catch {
+                showPublishStatus(.failed(error.localizedDescription))
+                hidePublishStatus(after: 3)
+                handleSessionError(error)
+            }
+        }
     }
 
     private func fetchPostsWithRefresh() async throws -> [CirclePost] {
@@ -629,6 +652,60 @@ struct CircleView: View {
         } catch CircleAPIError.unauthorized {
             let refreshedToken = try await validAccessToken(forceRefresh: true)
             try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshedToken)
+        }
+    }
+
+    private func createDriftBottleWithRefresh(imageData: Data) async throws {
+        let accessToken = try await validAccessToken()
+        do {
+            try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: accessToken)
+        } catch CircleAPIError.unauthorized {
+            let refreshedToken = try await validAccessToken(forceRefresh: true)
+            try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: refreshedToken)
+        }
+    }
+
+    private func drawDriftBottle() {
+        guard !isDrawingDriftBottle else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
+            isDrawingDriftBottle = true
+        }
+
+        Task {
+            do {
+                let response = try await drawDriftBottleWithRefresh()
+                driftBottleRemainingDraws = response.remainingDraws
+                driftBottleDailyLimit = response.dailyLimit
+
+                if let item = response.item {
+                    withAnimation(.spring(response: 0.46, dampingFraction: 0.86)) {
+                        driftBottlePost = item
+                    }
+                } else {
+                    switch response.reason {
+                    case "LIMIT_REACHED":
+                        showToast("今天的漂流瓶已经捞完了", style: .error)
+                    default:
+                        showToast("海面暂时没有可打捞的漂流瓶", style: .error)
+                    }
+                }
+            } catch {
+                handleSessionError(error)
+            }
+
+            withAnimation(.easeOut(duration: 0.24)) {
+                isDrawingDriftBottle = false
+            }
+        }
+    }
+
+    private func drawDriftBottleWithRefresh() async throws -> CircleDriftBottleDrawResponse {
+        let accessToken = try await validAccessToken()
+        do {
+            return try await sessionAPIClient.drawDriftBottle(accessToken: accessToken)
+        } catch CircleAPIError.unauthorized {
+            let refreshedToken = try await validAccessToken(forceRefresh: true)
+            return try await sessionAPIClient.drawDriftBottle(accessToken: refreshedToken)
         }
     }
 

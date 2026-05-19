@@ -81,33 +81,25 @@ struct CircleFeedView: View {
 }
 
 struct CircleDriftBottleView: View {
-    let posts: [CirclePost]
+    let post: CirclePost?
+    let isDrawing: Bool
+    let remainingDrawCount: Int?
+    let dailyDrawLimit: Int?
     let onTransfer: (CirclePost) -> Void
     let onThrow: () -> Void
-    let onRefresh: () -> Void
+    let onDraw: () -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
-
-    @State private var selectedPostID: String?
-    @State private var isDrawingBottle = false
-    @AppStorage("CircleDriftBottle.dailyDrawDate") private var dailyDrawDate = ""
-    @AppStorage("CircleDriftBottle.dailyDrawCount") private var dailyDrawCount = 0
-
-    private static let dailyDrawLimit = 3
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                if posts.isEmpty {
-                    CircleDriftBottleEmptyView()
-                        .padding(.horizontal, 16)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                } else if let selectedPost {
+                if let post {
                     VStack(spacing: 14) {
                         CircleDriftBottleCard(
-                            post: selectedPost,
-                            isDrawing: isDrawingBottle
+                            post: post,
+                            isDrawing: isDrawing
                         )
-                        .id(selectedPost.id)
+                        .id(post.id)
                         .transition(
                             .asymmetric(
                                 insertion: .move(edge: .trailing).combined(with: .opacity),
@@ -118,17 +110,17 @@ struct CircleDriftBottleView: View {
                         .layoutPriority(1)
 
                         CircleDriftBottleTransferButton(
-                            isDrawing: isDrawingBottle,
+                            isDrawing: isDrawing,
                             onTransfer: {
-                                guard !isDrawingBottle else { return }
-                                onTransfer(selectedPost)
+                                guard !isDrawing else { return }
+                                onTransfer(post)
                             }
                         )
 
                         CircleDriftBottleDrawAgainButton(
-                            isDrawing: isDrawingBottle,
+                            isDrawing: isDrawing,
                             remainingDrawCount: remainingDrawCount,
-                            onDraw: drawNextBottle
+                            onDraw: onDraw
                         )
                     }
                     .padding(.horizontal, 16)
@@ -137,10 +129,11 @@ struct CircleDriftBottleView: View {
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 } else {
                     CircleDriftBottleStartView(
-                        isDrawing: isDrawingBottle,
+                        isDrawing: isDrawing,
                         remainingDrawCount: remainingDrawCount,
+                        dailyDrawLimit: dailyDrawLimit,
                         onThrow: onThrow,
-                        onStart: drawNextBottle
+                        onStart: onDraw
                     )
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
@@ -149,96 +142,10 @@ struct CircleDriftBottleView: View {
                 }
             }
         }
-        .animation(.spring(response: 0.46, dampingFraction: 0.86), value: selectedPostID)
+        .animation(.spring(response: 0.46, dampingFraction: 0.86), value: post?.id)
         .onAppear {
             onScrollOffsetChange(0)
-            resetDailyDrawCountIfNeeded()
-            ensureSelectedPost()
         }
-        .onChange(of: posts) { _ in
-            ensureSelectedPost()
-        }
-    }
-
-    private var selectedPost: CirclePost? {
-        guard let selectedPostID else { return nil }
-        return posts.first(where: { $0.id == selectedPostID })
-    }
-
-    private var remainingDrawCount: Int {
-        max(0, Self.dailyDrawLimit - effectiveDailyDrawCount)
-    }
-
-    private var effectiveDailyDrawCount: Int {
-        dailyDrawDate == currentDayKey ? dailyDrawCount : 0
-    }
-
-    private var currentDayKey: String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
-        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
-    }
-
-    private func ensureSelectedPost() {
-        guard !posts.isEmpty else {
-            selectedPostID = nil
-            isDrawingBottle = false
-            return
-        }
-        if let currentSelectedPostID = selectedPostID,
-           !posts.contains(where: { $0.id == currentSelectedPostID }) {
-            selectedPostID = nil
-        }
-    }
-
-    private func selectRandomPost() {
-        guard !posts.isEmpty else {
-            selectedPostID = nil
-            return
-        }
-
-        if posts.count == 1 {
-            selectedPostID = posts[0].id
-            return
-        }
-
-        let currentID = selectedPostID
-        let candidates = posts.filter { $0.id != currentID }
-        selectedPostID = (candidates.randomElement() ?? posts.randomElement())?.id
-    }
-
-    private func drawNextBottle() {
-        guard !isDrawingBottle else { return }
-        guard consumeDailyDrawChance() else { return }
-
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
-            isDrawingBottle = true
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.76) {
-            withAnimation(.spring(response: 0.46, dampingFraction: 0.86)) {
-                selectRandomPost()
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
-                withAnimation(.easeOut(duration: 0.24)) {
-                    isDrawingBottle = false
-                }
-            }
-        }
-    }
-
-    private func resetDailyDrawCountIfNeeded() {
-        let dayKey = currentDayKey
-        guard dailyDrawDate != dayKey else { return }
-        dailyDrawDate = dayKey
-        dailyDrawCount = 0
-    }
-
-    private func consumeDailyDrawChance() -> Bool {
-        resetDailyDrawCountIfNeeded()
-        guard dailyDrawCount < Self.dailyDrawLimit else { return false }
-        dailyDrawCount += 1
-        return true
     }
 }
 
@@ -528,7 +435,8 @@ private struct CircleFeedScrollOffsetReader: View {
 
 private struct CircleDriftBottleStartView: View {
     let isDrawing: Bool
-    let remainingDrawCount: Int
+    let remainingDrawCount: Int?
+    let dailyDrawLimit: Int?
     let onThrow: () -> Void
     let onStart: () -> Void
 
@@ -567,7 +475,7 @@ private struct CircleDriftBottleStartView: View {
                     .disabled(isDrawing)
 
                     Button(action: onStart) {
-                        Label("开始捞（还有 \(remainingDrawCount) 次）", systemImage: "sparkles")
+                        Label(startTitle, systemImage: "sparkles")
                             .font(.system(size: 16, weight: .semibold))
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(.white)
@@ -575,13 +483,13 @@ private struct CircleDriftBottleStartView: View {
                             .minimumScaleFactor(0.86)
                             .frame(width: primaryButtonWidth, height: 52)
                             .background(
-                                remainingDrawCount > 0 ? CircleFeedStyle.driftTint : Color(.systemGray3),
+                                canDraw ? CircleFeedStyle.driftTint : Color(.systemGray3),
                                 in: Capsule()
                             )
                             .shadow(color: CircleFeedStyle.driftTint.opacity(0.26), radius: 18, x: 0, y: 10)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isDrawing || remainingDrawCount <= 0)
+                    .disabled(isDrawing || !canDraw)
 
                     Spacer(minLength: 0)
                 }
@@ -591,6 +499,21 @@ private struct CircleDriftBottleStartView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isDrawing)
+    }
+
+    private var canDraw: Bool {
+        (remainingDrawCount ?? 1) > 0
+    }
+
+    private var startTitle: String {
+        if let remainingDrawCount {
+            guard remainingDrawCount > 0 else { return "今日已捞完" }
+            return "开始捞（还有 \(remainingDrawCount) 次）"
+        }
+        if let dailyDrawLimit {
+            return "开始捞（每日 \(dailyDrawLimit) 次）"
+        }
+        return "开始捞"
     }
 }
 
@@ -948,7 +871,7 @@ private struct CircleDriftBottleOceanSVGView: View {
 
 private struct CircleDriftBottleDrawAgainButton: View {
     let isDrawing: Bool
-    let remainingDrawCount: Int
+    let remainingDrawCount: Int?
     let onDraw: () -> Void
 
     var body: some View {
@@ -969,12 +892,18 @@ private struct CircleDriftBottleDrawAgainButton: View {
                 }
         }
         .buttonStyle(.plain)
-        .disabled(isDrawing || remainingDrawCount <= 0)
-        .opacity(remainingDrawCount > 0 ? 1 : 0.58)
+        .disabled(isDrawing || !canDraw)
+        .opacity(canDraw ? 1 : 0.58)
+    }
+
+    private var canDraw: Bool {
+        (remainingDrawCount ?? 1) > 0
     }
 
     private var drawTitle: String {
         if isDrawing { return "正在打捞" }
+        guard let remainingDrawCount else { return "再捞一个" }
+        guard remainingDrawCount > 0 else { return "今日已捞完" }
         return "再捞一个（还有 \(remainingDrawCount) 次）"
     }
 }
