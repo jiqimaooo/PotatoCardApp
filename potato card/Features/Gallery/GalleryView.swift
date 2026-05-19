@@ -435,14 +435,6 @@ struct GalleryImageViewer: View {
                 bottomScrollSection
             }
             .background(viewerBackgroundColor.ignoresSafeArea())
-            // .height(560) 状态下底层 ScrollView 内容不足以贴到顶，
-            // 系统会自动给 navigation bar 加一层「.bar 材质」凸显标题，
-            // 在我们这套自定义 viewerBackgroundColor（白 / systemGroupedBackground）
-            // 之上就会显出一条比背景更浅 / 更白的横条。
-            // 把 toolbar 背景改成跟 content 同色（visible 强制覆盖系统材质），
-            // .large 时同样保持一致，不闪烁。
-            .toolbarBackground(viewerBackgroundColor, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
             .onChange(of: selectedIndex) { _ in
                 // 切到另一张图：把草稿重置为新图已保存值。
                 draftAdjustment = savedAdjustment(for: photos[selectedIndex])
