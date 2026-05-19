@@ -69,8 +69,8 @@ struct AlbumView: View {
                 initialIndex: group.initialIndex,
                 onTransferToDevice: onTransferToDevice
             )
-                .presentationDetents([.height(560)])
-                .presentationDragIndicator(.visible)
+            // detent / dragIndicator 都由 AlbumImageViewer 内部声明，
+            // 编辑模式会在 .height(560) 和 .large 之间切换。
         }
     }
 
@@ -148,15 +148,15 @@ private struct AlbumImageViewer: View {
     @State private var selectedIndex: Int
     @State private var pendingTransferAlbum: String?
     @State private var pendingTransferImage: UIImage?
-    // 与 GalleryImageViewer 同款「原地调整」状态机：进入编辑模式时同一张
-    // 「土豆片」卡片直接变成可触摸的编辑区，底部按钮 morph 成滑块。
-    @State private var isEditing = false
+    // 与 GalleryImageViewer 同款：编辑状态由 sheet 高度驱动。
+    // .large = 全屏编辑，.height(560) = 预览。
+    @State private var selectedDetent: PresentationDetent = .height(560)
     @State private var draftAdjustment = EInkManualAdjustment.default
     @State private var gestureScaleStart: CGFloat = 1
     @State private var gestureRotationStart: CGFloat = 0
     @State private var gestureOffsetStart: CGSize = .zero
-    @State private var swipeUpDragOffset: CGFloat = 0
-    private let swipeUpTriggerThreshold: CGFloat = 56
+
+    private var isExpanded: Bool { selectedDetent == .large }
 
     init(albums: [String], initialIndex: Int, onTransferToDevice: @escaping (String) -> Void) {
         self.albums = albums
@@ -167,31 +167,28 @@ private struct AlbumImageViewer: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                (colorScheme == .dark ? Color.black : Color.white)
-                    .ignoresSafeArea()
+            VStack(spacing: 0) {
+                topPreviewSection
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 352)
 
-                albumFramedPreview
-
-                VStack {
-                    Spacer()
-
-                    bottomContent
-                        .padding(.bottom, 10)
-                        .offset(y: 20)
-                        .animation(.spring(response: 0.36, dampingFraction: 0.84), value: isEditing)
-                }
-                .contentShape(Rectangle())
-                .simultaneousGesture(isEditing ? nil : swipeUpGesture)
-                .accessibilityAction(named: "进入手动调整") {
-                    guard !isTransferInProgress, !isEditing else { return }
-                    enterEditMode()
-                }
+                bottomScrollSection
             }
+            .background((colorScheme == .dark ? Color.black : Color.white).ignoresSafeArea())
             .onChange(of: selectedIndex) { _ in
-                if isEditing {
-                    draftAdjustment = savedAdjustmentForCurrentAlbum()
+                draftAdjustment = savedAdjustmentForCurrentAlbum()
+                resetGestureBaselines()
+            }
+            .onAppear {
+                draftAdjustment = savedAdjustmentForCurrentAlbum()
+                resetGestureBaselines()
+            }
+            .onChange(of: isExpanded) { expanded in
+                if !expanded {
+                    persistDraftIfNeeded()
+                } else {
                     resetGestureBaselines()
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }
             }
             .onChange(of: bleService.transferPhase) { phase in
@@ -215,8 +212,93 @@ private struct AlbumImageViewer: View {
                     Text(albums[selectedIndex])
                         .font(.system(size: 17, weight: .semibold))
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isExpanded {
+                        Button("完成") {
+                            collapseToPreview()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
             }
         }
+        .presentationDetents([.height(560), .large], selection: $selectedDetent)
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
+    }
+
+    // MARK: - Layout
+
+    private var topPreviewSection: some View {
+        ZStack {
+            albumFramedPreview
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var bottomScrollSection: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 16) {
+                primaryControls
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+
+                if isExpanded {
+                    adjustmentSection
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.bottom, 24)
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: isExpanded)
+    }
+
+    private var primaryControls: some View {
+        VStack(spacing: 10) {
+            transferStatusView
+
+            Button(action: transferSelectedAlbumDirectly) {
+                transferButtonLabel
+            }
+            .buttonStyle(.plain)
+            .disabled(activeDevice == nil)
+
+            Button {
+                if isExpanded {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        draftAdjustment = .default
+                    }
+                    resetGestureBaselines()
+                } else {
+                    expandToEdit()
+                }
+            } label: {
+                Label(isExpanded ? "重置" : "手动调整",
+                      systemImage: isExpanded ? "arrow.counterclockwise" : "slider.horizontal.3")
+                    .frame(minWidth: 100)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
+            .tint(currentAlbumIsCustomized || draftAdjustment != .default ? .yellow : .secondary)
+            .disabled(isTransferInProgress)
+        }
+    }
+
+    private var adjustmentSection: some View {
+        VStack(spacing: 0) {
+            sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
+        }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
     }
 
     @ViewBuilder
@@ -263,87 +345,7 @@ private struct AlbumImageViewer: View {
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
 
-    // MARK: - Bottom morph
-
-    @ViewBuilder
-    private var bottomContent: some View {
-        if isEditing {
-            editingControls
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .bottom)),
-                    removal: .opacity
-                ))
-        } else {
-            viewerControls
-                .transition(.asymmetric(
-                    insertion: .opacity,
-                    removal: .opacity.combined(with: .move(edge: .bottom))
-                ))
-        }
-    }
-
-    private var viewerControls: some View {
-        VStack(spacing: 10) {
-            transferStatusView
-
-            Button(action: transferSelectedAlbumDirectly) {
-                transferButtonLabel
-            }
-            .buttonStyle(.plain)
-            .disabled(activeDevice == nil)
-
-            Button {
-                enterEditMode()
-            } label: {
-                Label("手动调整", systemImage: "slider.horizontal.3")
-                    .frame(minWidth: 100)
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .controlSize(.regular)
-            .tint(currentAlbumIsCustomized ? .yellow : .secondary)
-            .disabled(isTransferInProgress)
-        }
-    }
-
-    private var editingControls: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 4) {
-                sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
-                sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
-                sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
-                sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
-            }
-            .padding(.horizontal, 16)
-
-            HStack(spacing: 12) {
-                Button(role: .cancel) {
-                    cancelEditMode()
-                } label: {
-                    Text("取消").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.regular)
-
-                Button {
-                    saveEditMode()
-                } label: {
-                    Text("保存").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.regular)
-            }
-            .padding(.horizontal, 16)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.bar)
-                .padding(.horizontal, 8)
-        )
-        .padding(.horizontal, -8)
-    }
+    // MARK: - Bottom layout
 
     private func sliderRow(
         title: String,
@@ -352,18 +354,19 @@ private struct AlbumImageViewer: View {
         format: @escaping (CGFloat) -> String
     ) -> some View {
         HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                Text(format(value.wrappedValue))
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 56, alignment: .leading)
 
             Slider(value: value, in: range)
-
-            Text(format(value.wrappedValue))
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private func scalePercent(_ value: CGFloat) -> String {
@@ -397,26 +400,25 @@ private struct AlbumImageViewer: View {
         draftAdjustment = savedAdjustmentForCurrentAlbum()
         resetGestureBaselines()
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-            isEditing = true
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .large
         }
     }
 
-    private func saveEditMode() {
+    private func expandToEdit() { enterEditMode() }
+
+    private func collapseToPreview() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .height(560)
+        }
+    }
+
+    private func persistDraftIfNeeded() {
         let key = TransferEditStateKey.album(albums[selectedIndex])
         if draftAdjustment == .default {
             TransferEditStateStore.delete(for: key)
         } else {
             TransferEditStateStore.save(draftAdjustment, for: key)
-        }
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isEditing = false
-        }
-    }
-
-    private func cancelEditMode() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isEditing = false
         }
     }
 
@@ -468,7 +470,7 @@ private struct AlbumImageViewer: View {
 
     private var albumFramedPreview: some View {
         ZStack {
-            if isEditing, let image = UIImage(named: albums[selectedIndex]) {
+            if isExpanded, let image = UIImage(named: albums[selectedIndex]) {
                 editableScreen(for: image)
                     .frame(width: 186, height: 280)
                     .mask(
@@ -591,26 +593,7 @@ private struct AlbumImageViewer: View {
         .frame(width: 186, height: 280)
     }
 
-    // 主预览底部「向上一拉」触发进入编辑模式；不再驱动任何可见提示动画。
-    private var swipeUpGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
-            .onChanged { value in
-                let dy = value.translation.height
-                guard dy <= 0 else {
-                    swipeUpDragOffset = 0
-                    return
-                }
-                swipeUpDragOffset = dy
-            }
-            .onEnded { value in
-                let shouldTrigger = -swipeUpDragOffset >= swipeUpTriggerThreshold
-                    || value.predictedEndTranslation.height <= -swipeUpTriggerThreshold * 1.2
-                swipeUpDragOffset = 0
-                if shouldTrigger, !isTransferInProgress, !isEditing {
-                    enterEditMode()
-                }
-            }
-    }
+    // 不再需要自定义上滑手势：sheet 原生的 detent 拖动就是「进入全屏编辑」入口。
 
 }
 

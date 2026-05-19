@@ -66,8 +66,8 @@ struct GalleryView: View {
                     pendingShareAfterDismiss = destination
                 }
             )
-            .presentationDetents([.height(560)])
-            .presentationDragIndicator(.visible)
+            // detent / dragIndicator 都由 GalleryImageViewer 内部声明，
+            // 因为编辑模式需要在 .height(560) 和 .large 之间切换。
         }
         .onChange(of: selectedPhotoSet?.id) { newID in
             // viewer 关闭瞬间触发：把挂起的分享目标接力到 shareDestination sheet。
@@ -381,19 +381,16 @@ struct GalleryImageViewer: View {
     @State private var customizedPhotoIDs: Set<UUID> = []
     // 在 sheet 里修改过名称后本地缓存，只读走外层 photos 会丢掉变更。
     @State private var renamedTitles: [UUID: String] = [:]
-    // “原地调整”状态机：viewer 不再叠一层 sheet，而是让同一张“土豆片”
-    // 卡片直接变成可交互的编辑面板。isEditing == true 时：
-    //   · 底部按钮 morph 为滑块 + 取消/保存
-    //   · 屏幕照片接手与提供拖动 / 双指缩放 / 旋转
-    //   · TabView 换成单图显示，避免编辑手势与翻页手势冲突
-    @State private var isEditing = false
+    // 编辑状态完全由「当前 sheet 高度」驱动：.large = 全屏编辑，
+    // .height(560) = 预览。不再维护 isEditing/draft 二重状态机，
+    // 也不再需要自定义上滑手势——原生 sheet detent 拖动就是调整入口。
+    @State private var selectedDetent: PresentationDetent = .height(560)
     @State private var draftAdjustment = EInkManualAdjustment.default
     @State private var gestureScaleStart: CGFloat = 1
     @State private var gestureRotationStart: CGFloat = 0
     @State private var gestureOffsetStart: CGSize = .zero
-    // 底部上滑累计位移：仅用于判断是否达到进入编辑阈值，不再驱动提示胶囊动画。
-    @State private var swipeUpDragOffset: CGFloat = 0
-    private let swipeUpTriggerThreshold: CGFloat = 56
+
+    private var isExpanded: Bool { selectedDetent == .large }
 
     // 点击 toolbar 右上角分享 → 由外层 GalleryView 接管并在 viewer dismiss 后弹分享 sheet，
     // 避免继续出现两张 sheet 叠加在一起的“两张卡片”状况。
@@ -426,37 +423,40 @@ struct GalleryImageViewer: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                viewerBackgroundColor
-                    .ignoresSafeArea()
+            // 把整个 viewer 拆成「土豆片预览 + 控件」两个上下排列的区块；
+            // 上半部分高度固定 ≈ 352pt，下半部分在 .height(560) 时只显示按钮，
+            // 在 .large 时滑入滑块面板，整个视图始终是同一级 hierarchy，
+            // 不再出现两张 sheet 叠加 / 二级 morph 的情况。
+            VStack(spacing: 0) {
+                topPreviewSection
+                    .frame(maxWidth: .infinity)
+                    .frame(height: isContentLocked ? 360 : 352)
 
-                devicePreview
-
-                if isContentLocked {
-                    lockedContentTitle
-                        .allowsHitTesting(false)
-                }
-
-                VStack {
-                    Spacer()
-
-                    bottomContent
-                        .padding(.bottom, isContentLocked ? 28 : 10)
-                        .offset(y: isContentLocked ? 0 : 20)
-                        .animation(.spring(response: 0.36, dampingFraction: 0.84), value: isEditing)
-                }
-                .contentShape(Rectangle())
-                .simultaneousGesture((isContentLocked || isEditing) ? nil : swipeUpGesture)
-                .accessibilityAction(named: "进入手动调整") {
-                    guard !isContentLocked, !isTransferInProgress, !isEditing else { return }
-                    enterEditMode()
-                }
+                bottomScrollSection
             }
+            .background(viewerBackgroundColor.ignoresSafeArea())
             .onChange(of: selectedIndex) { _ in
-                // 切到另一张图时，如果当前在编辑模式，把草稿重新对齐到新图的已保存值。
-                if isEditing {
+                // 切到另一张图：把草稿重置为新图已保存值。
+                draftAdjustment = savedAdjustment(for: photos[selectedIndex])
+                resetGestureBaselines()
+            }
+            .onAppear {
+                // 进入 viewer 时把当前图的已保存调整带进 draft，
+                // 这样切到 .large 直接就是上次的位置。
+                if photos.indices.contains(selectedIndex) {
                     draftAdjustment = savedAdjustment(for: photos[selectedIndex])
                     resetGestureBaselines()
+                }
+            }
+            .onChange(of: isExpanded) { expanded in
+                // 收起时把当前 draft 持久化；这样用户拖回小尺寸即等同于「保存」，
+                // 与系统照片编辑/系统相机的「拉下来即应用」交互一致。
+                if !expanded {
+                    persistDraftIfNeeded()
+                } else {
+                    // 拉起时重置手势基线，避免在 .height(560) 时的累计偏移影响第一次拖动。
+                    resetGestureBaselines()
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }
             }
             .task {
@@ -480,37 +480,66 @@ struct GalleryImageViewer: View {
                     }
 
                     ToolbarItem(placement: .topBarTrailing) {
-                        // 编辑模式下不显示分享菜单；保存 / 取消由底部主操作区接管，
-                        // 避免顶部和底部出现两套并行的退出入口。
-                        if !isEditing, let onRequestShare {
+                        if isExpanded {
+                            // 全屏调整状态下右上角变成「完成」，等同于拖回小尺寸——
+                            // 给键盘焦点 / 无障碍用户一个显式的退出通道。
+                            Button("完成") {
+                                collapseToPreview()
+                            }
+                            .fontWeight(.semibold)
+                        } else if let onRequestShare {
                             shareMenu(onRequestShare: onRequestShare)
                         }
                     }
                 }
             }
         }
+        // 同一张 sheet 用 .height(560) ↔ .large 两个 detent，
+        // 把「全屏编辑」做成原生交互：上拉 = 进入编辑，下拉 = 回到预览。
+        .presentationDetents(
+            isContentLocked ? [.height(560)] : [.height(560), .large],
+            selection: $selectedDetent
+        )
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
     }
 
-    // MARK: - Bottom morph
+    // MARK: - Layout 拆分
 
-    @ViewBuilder
-    private var bottomContent: some View {
-        if isEditing {
-            editingControls
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .bottom)),
-                    removal: .opacity
-                ))
-        } else {
-            viewerControls
-                .transition(.asymmetric(
-                    insertion: .opacity,
-                    removal: .opacity.combined(with: .move(edge: .bottom))
-                ))
+    // 上半部：永远是「土豆片」预览。.large 时屏幕区域接手手势，
+    // 用户可以直接拖动 / 双指缩放 / 旋转图片本身。
+    private var topPreviewSection: some View {
+        ZStack {
+            devicePreview
+
+            if isContentLocked {
+                lockedContentTitle
+                    .allowsHitTesting(false)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var viewerControls: some View {
+    // 下半部：在 .height(560) 状态下是双按钮；在 .large 时跟着 ScrollView 滑入滑块面板。
+    private var bottomScrollSection: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 16) {
+                primaryControls
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+
+                if isExpanded {
+                    adjustmentSection
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.bottom, 24)
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: isExpanded)
+    }
+
+    // 上下文按钮：传输到设备 + 手动调整 / 重置
+    private var primaryControls: some View {
         VStack(spacing: 10) {
             transferStatusView
 
@@ -522,63 +551,44 @@ struct GalleryImageViewer: View {
 
             if !isContentLocked {
                 Button {
-                    enterEditMode()
+                    if isExpanded {
+                        // 已经在编辑：第二次点 = 重置当前调整。
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            draftAdjustment = .default
+                        }
+                        resetGestureBaselines()
+                    } else {
+                        expandToEdit()
+                    }
                 } label: {
-                    Label("手动调整", systemImage: "slider.horizontal.3")
+                    Label(isExpanded ? "重置" : "手动调整",
+                          systemImage: isExpanded ? "arrow.counterclockwise" : "slider.horizontal.3")
                         .frame(minWidth: 100)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.regular)
-                .tint(currentPhotoIsCustomized ? .yellow : .secondary)
+                .tint(currentPhotoIsCustomized || draftAdjustment != .default ? .yellow : .secondary)
                 .disabled(isTransferInProgress)
             }
         }
     }
 
-    private var editingControls: some View {
-        // 内嵌的调整面板：滑块与 TransferSheetView 的几何完全一致，
-        // 但所有操作就地完成，没有第二张 sheet / 卡片堆叠。
-        VStack(spacing: 12) {
-            VStack(spacing: 4) {
-                sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
-                sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
-                sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
-                sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
-            }
-            .padding(.horizontal, 16)
-
-            HStack(spacing: 12) {
-                Button(role: .cancel) {
-                    cancelEditMode()
-                } label: {
-                    Text("取消")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.regular)
-
-                Button {
-                    saveEditMode()
-                } label: {
-                    Text("保存")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.regular)
-            }
-            .padding(.horizontal, 16)
+    // .large 时显示的滑块面板。视觉上是一个标准的「分组」section，
+    // 不再用上一版那种圆角浮卡——避免「太丑 / 没全屏」的观感。
+    private var adjustmentSection: some View {
+        VStack(spacing: 0) {
+            sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
+            Divider().padding(.leading, 56)
+            sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+            Divider().padding(.leading, 56)
+            sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
+            Divider().padding(.leading, 56)
+            sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
         }
-        .background(
-            // 给底部加一层浅薄的 .bar 材质，让滑块从视觉上脱离背景，
-            // 而不是浮在透明区域上。
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.bar)
-                .padding(.horizontal, 8)
-        )
-        .padding(.horizontal, -8)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
     }
 
     private func sliderRow(
@@ -587,19 +597,22 @@ struct GalleryImageViewer: View {
         range: ClosedRange<CGFloat>,
         format: @escaping (CGFloat) -> String
     ) -> some View {
+        // 跟随系统 Form 里的 LabeledContent 样式：左侧标题 + 数值，右侧滑块。
+        // 这样与其他 iOS 原生调整面板（控制中心 / 照片 markup 等）视觉一致。
         HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                Text(format(value.wrappedValue))
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 56, alignment: .leading)
 
             Slider(value: value, in: range)
-
-            Text(format(value.wrappedValue))
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private func scalePercent(_ value: CGFloat) -> String {
@@ -641,19 +654,28 @@ struct GalleryImageViewer: View {
         .accessibilityLabel("分享")
     }
 
-    // MARK: - Edit-mode helpers
+    // MARK: - Detent 过渡
 
-    private func enterEditMode() {
+    private func expandToEdit() {
         guard !isTransferInProgress else { return }
+        // 进入 .large 之前先把 draft 重新对齐到当前图的已保存值，
+        // 避免上一张图的 draft 被带到这一张。
         draftAdjustment = savedAdjustment(for: photos[selectedIndex])
         resetGestureBaselines()
-        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-            isEditing = true
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .large
         }
     }
 
-    private func saveEditMode() {
+    private func collapseToPreview() {
+        // 主动收起同时会触发 onChange(of: isExpanded)，那边统一调用 persistDraftIfNeeded。
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .height(560)
+        }
+    }
+
+    private func persistDraftIfNeeded() {
+        guard photos.indices.contains(selectedIndex) else { return }
         let photo = photos[selectedIndex]
         let key = editStateKeyForPhoto(photo)
         if draftAdjustment == .default {
@@ -662,15 +684,6 @@ struct GalleryImageViewer: View {
             TransferEditStateStore.save(draftAdjustment, for: key)
         }
         refreshCustomizedPhotoIDs()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isEditing = false
-        }
-    }
-
-    private func cancelEditMode() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isEditing = false
-        }
     }
 
     private func resetGestureBaselines() {
@@ -829,9 +842,9 @@ struct GalleryImageViewer: View {
 
     private var devicePreview: some View {
         ZStack {
-            // 编辑模式下只显示当前照片并接所有手势；
-            // 非编辑模式下保持原有的 TabView，可以左右翻页。
-            if isEditing, photos.indices.contains(selectedIndex) {
+            // 全屏调整状态下只显示当前照片并接所有手势；
+            // 预览状态下保持原有的 TabView，可以左右翻页。
+            if isExpanded, photos.indices.contains(selectedIndex) {
                 editableScreen(for: photos[selectedIndex])
                     .frame(width: 186, height: 280)
                     .mask(
@@ -865,29 +878,6 @@ struct GalleryImageViewer: View {
         }
         .frame(width: 220, height: 352)
         .offset(y: isContentLocked ? -14 : -60)
-    }
-
-    // 主预览底部的上滑手势：只在向上拖动时收集累计位移，松手到达阈值则进入编辑模式。
-    // 用 simultaneousGesture 接入，确保不会抢掉 sheet 自带的下滑关闭手势。
-    // 不再驱动任何可见动画（提示胶囊取消），该手势只是「隐形」加速器。
-    private var swipeUpGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
-            .onChanged { value in
-                let dy = value.translation.height
-                guard dy <= 0 else {
-                    swipeUpDragOffset = 0
-                    return
-                }
-                swipeUpDragOffset = dy
-            }
-            .onEnded { value in
-                let shouldTrigger = -swipeUpDragOffset >= swipeUpTriggerThreshold
-                    || value.predictedEndTranslation.height <= -swipeUpTriggerThreshold * 1.2
-                swipeUpDragOffset = 0
-                if shouldTrigger, !isTransferInProgress, !isEditing {
-                    enterEditMode()
-                }
-            }
     }
 
     private var renderTargetSize: CGSize {
