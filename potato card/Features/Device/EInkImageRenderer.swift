@@ -116,27 +116,40 @@ enum EInkImageRenderer {
             UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: targetSize))
 
-            let drawRect = drawRect(
+            // baseRect 只负责“按 baseScale * manualScale 居中放置”，不含手动 offset。
+            // offset 改为在 CGContext 上做平移，并且放在 rotate 之外，保证：
+            //   最终像素位置 = T(offset) ∘ R(rotation, around center) ∘ baseRect
+            // —— 与 SwiftUI 预览里的 `.scaleEffect → .rotationEffect → .offset` 顺序完全一致。
+            // 之前的实现把 offset 写进 baseRect.origin 再整体旋转，等价于让 offset 也被旋转，
+            // 旋转角度不为 0 时预览与实际传输图就会对不上。
+            let baseRect = baseDrawRect(
                 for: image.size,
                 targetSize: targetSize,
                 fitMode: fitMode,
                 adjustment: adjustment
             )
 
-            // 只在“手动调整”模式下应用旋转，避免给 .centerCrop 加上不期望的变换。
-            // 绕画布中心转动 -> drawRect 仍以未旋转的坐标计算，与预览中 .rotationEffect 的默认锤点保持一致。
+            // 只在“手动调整”模式下应用旋转 / 偏移，避免给 .centerCrop 加上不期望的变换。
             let rotation = fitMode == .manual ? adjustment.rotation : 0
-            if rotation != 0 {
+            let offsetX = fitMode == .manual ? adjustment.offsetX : 0
+            let offsetY = fitMode == .manual ? adjustment.offsetY : 0
+
+            if rotation != 0 || offsetX != 0 || offsetY != 0 {
                 let cgContext = context.cgContext
                 cgContext.saveGState()
-                cgContext.translateBy(x: targetSize.width / 2, y: targetSize.height / 2)
-                cgContext.rotate(by: rotation)
-                cgContext.translateBy(x: -targetSize.width / 2, y: -targetSize.height / 2)
-                image.draw(in: drawRect)
+                // CGContext 变换的合成顺序：后调用的作用在更靠近“画笔”的一侧，
+                // 因此这里先 translate(offset)、再 rotate，等价于先 rotate 再 translate(offset) 应用到像素上。
+                cgContext.translateBy(x: offsetX, y: offsetY)
+                if rotation != 0 {
+                    cgContext.translateBy(x: targetSize.width / 2, y: targetSize.height / 2)
+                    cgContext.rotate(by: rotation)
+                    cgContext.translateBy(x: -targetSize.width / 2, y: -targetSize.height / 2)
+                }
+                image.draw(in: baseRect)
                 cgContext.restoreGState()
             } else {
                 // 直接绘制到目标尺寸，避免先把 iPhone 原图完整解码成超大位图。
-                image.draw(in: drawRect)
+                image.draw(in: baseRect)
             }
         }
     }
@@ -169,7 +182,10 @@ enum EInkImageRenderer {
         }
     }
 
-    private static func drawRect(
+    // 只计算“baseScale * manualScale 居中放置”后的 rect，**不含手动 offset**。
+    // offset 由调用方在 CGContext 上以平移的形式叠加，且必须放在旋转的外层，
+    // 才能与 SwiftUI 预览里 `.rotationEffect` 之后再 `.offset` 的几何顺序一致。
+    private static func baseDrawRect(
         for imageSize: CGSize,
         targetSize: CGSize,
         fitMode: EInkImageFitMode,
@@ -187,8 +203,8 @@ enum EInkImageRenderer {
         )
 
         let origin = CGPoint(
-            x: (targetSize.width - finalSize.width) / 2 + (fitMode == .manual ? adjustment.offsetX : 0),
-            y: (targetSize.height - finalSize.height) / 2 + (fitMode == .manual ? adjustment.offsetY : 0)
+            x: (targetSize.width - finalSize.width) / 2,
+            y: (targetSize.height - finalSize.height) / 2
         )
 
         return CGRect(origin: origin, size: finalSize)
