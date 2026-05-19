@@ -26,6 +26,7 @@ struct CircleView: View {
     @State private var lastFeedScrollOffset: CGFloat = 0
     @State private var circleImageViewerRequest: CircleImageViewerRequest?
     @State private var isPreparingTransferSheet = false
+    @State private var isBetaNoticePresented = false
 
     private let apiClient: CircleAPIClient
     private let bottomFloatingContentPadding = AppBottomBarMetrics.floatingControlBottomPadding
@@ -183,14 +184,20 @@ struct CircleView: View {
             .presentationDragIndicator(.visible)
             .environmentObject(bleService)
         }
+        .sheet(isPresented: $isBetaNoticePresented) {
+            CircleBetaNoticeSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
             ForEach(FeedSection.allCases, id: \.self) { section in
                 feedTab(section)
             }
             Spacer()
+            betaBadge
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -210,6 +217,26 @@ struct CircleView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(section.title)
+    }
+
+    private var betaBadge: some View {
+        Button {
+            isBetaNoticePresented = true
+        } label: {
+            Text("BETA")
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(0.7)
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color(.systemBackground), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(Color.primary.opacity(0.22), lineWidth: 0.8)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("土豆圈 Beta 试运行说明")
     }
 
     @ViewBuilder
@@ -589,6 +616,7 @@ struct CircleView: View {
                 let fetchedPosts = try await fetchPostsWithRefresh()
                 posts = fetchedPosts
                 saveCachedPosts(fetchedPosts)
+                syncCurrentProfileAvatar(from: fetchedPosts)
             } catch {
                 handleSessionError(error)
             }
@@ -607,6 +635,7 @@ struct CircleView: View {
                     let fetchedPosts = try await fetchPostsWithRefresh()
                     posts = fetchedPosts
                     saveCachedPosts(fetchedPosts)
+                    syncCurrentProfileAvatar(from: fetchedPosts)
                 } catch {
                     showToast("发布成功，但刷新失败：\(error.localizedDescription)", style: .error)
                 }
@@ -728,11 +757,23 @@ struct CircleView: View {
         guard posts.isEmpty, let userID = sessionStore.profile?.id else { return }
         guard let cachedPosts = CircleFeedPostCache.shared.loadPosts(for: userID) else { return }
         posts = cachedPosts
+        syncCurrentProfileAvatar(from: cachedPosts)
     }
 
     private func saveCachedPosts(_ posts: [CirclePost]) {
         guard let userID = sessionStore.profile?.id else { return }
         CircleFeedPostCache.shared.savePosts(posts, for: userID)
+    }
+
+    private func syncCurrentProfileAvatar(from posts: [CirclePost]) {
+        guard
+            let profile = sessionStore.profile,
+            profile.avatarUrl == nil,
+            let avatarUrl = posts.first(where: { $0.author.id == profile.id })?.author.avatarUrl
+        else {
+            return
+        }
+        sessionStore.updateProfileAvatarURL(avatarUrl)
     }
 
     private func validAccessToken(forceRefresh: Bool = false) async throws -> String {
@@ -858,7 +899,96 @@ private struct CircleImageViewerRequest: Identifiable {
     let lockedPreviewText: String
 }
 
-private final class CircleFeedPostCache {
+private struct CircleBetaNoticeSheet: View {
+    private let riskItems = [
+        "服务不稳定",
+        "功能变更",
+        "数据结构调整",
+        "临时停服或重置",
+    ]
+
+    private let dataItems = [
+        "用户名与头像",
+        "发布内容",
+        "评论与点赞",
+        "收藏记录",
+        "圈子身份信息",
+    ]
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
+                    paragraph("土豆圈目前仍处于 Beta 测试阶段，功能与服务正在持续开发和调整中。")
+
+                    noticeSection(title: "在试运行期间，可能会出现：", items: riskItems)
+
+                    paragraph("因此，当前阶段产生的部分用户数据可能不会被永久保留，包括但不限于：")
+
+                    noticeSection(title: nil, items: dataItems)
+
+                    paragraph("请勿将 Beta 阶段服务用于重要数据的长期存储。")
+                    paragraph("后续正式版本上线后，圈子系统与数据机制会逐步稳定完善。")
+                    paragraph("感谢大家参与测试与反馈 🥔")
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 18)
+                .padding(.bottom, 34)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Beta 说明")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("🥔")
+                .font(.system(size: 38))
+
+            Text("土豆圈 Beta 试运行说明")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private func noticeSection(title: String?, items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(items, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(item)
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func paragraph(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 15))
+            .foregroundStyle(.secondary)
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+final class CircleFeedPostCache {
     static let shared = CircleFeedPostCache()
 
     private let fileManager = FileManager.default

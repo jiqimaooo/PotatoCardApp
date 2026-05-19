@@ -4,6 +4,14 @@ struct CircleUserProfile: Codable, Equatable, Identifiable {
     let id: String
     let username: String
     let avatarKey: String
+    let avatarUrl: URL?
+
+    init(id: String, username: String, avatarKey: String, avatarUrl: URL? = nil) {
+        self.id = id
+        self.username = username
+        self.avatarKey = avatarKey
+        self.avatarUrl = avatarUrl
+    }
 }
 
 enum CirclePostChannel: String, Codable, Equatable {

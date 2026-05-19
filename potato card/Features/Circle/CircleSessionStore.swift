@@ -14,6 +14,7 @@ final class CircleSessionStore: ObservableObject {
         static let userID = "circleUserID"
         static let username = "circleUsername"
         static let avatarKey = "circleAvatarKey"
+        static let avatarURL = "circleAvatarURL"
     }
 
     private let defaults: UserDefaults
@@ -46,11 +47,17 @@ final class CircleSessionStore: ObservableObject {
         let userID = defaults.string(forKey: Keys.userID) ?? ""
         let username = defaults.string(forKey: Keys.username) ?? ""
         let avatarKey = defaults.string(forKey: Keys.avatarKey) ?? ""
+        let avatarURLString = defaults.string(forKey: Keys.avatarURL) ?? ""
         guard !userID.isEmpty, !username.isEmpty, !avatarKey.isEmpty, token != nil, refreshToken != nil else {
             profile = nil
             return
         }
-        profile = CircleUserProfile(id: userID, username: username, avatarKey: avatarKey)
+        profile = CircleUserProfile(
+            id: userID,
+            username: username,
+            avatarKey: avatarKey,
+            avatarUrl: URL(string: avatarURLString)
+        )
     }
 
     func saveSession(accessToken: String, refreshToken: String, profile: CircleUserProfile) {
@@ -59,11 +66,28 @@ final class CircleSessionStore: ObservableObject {
         defaults.set(profile.id, forKey: Keys.userID)
         defaults.set(profile.username, forKey: Keys.username)
         defaults.set(profile.avatarKey, forKey: Keys.avatarKey)
+        if let avatarUrl = profile.avatarUrl {
+            defaults.set(avatarUrl.absoluteString, forKey: Keys.avatarURL)
+        } else {
+            defaults.removeObject(forKey: Keys.avatarURL)
+        }
         self.profile = profile
     }
 
     func saveSession(_ session: CircleAuthSession) {
         saveSession(accessToken: session.accessToken, refreshToken: session.refreshToken, profile: session.profile)
+    }
+
+    func updateProfileAvatarURL(_ avatarUrl: URL) {
+        guard let profile else { return }
+        let updatedProfile = CircleUserProfile(
+            id: profile.id,
+            username: profile.username,
+            avatarKey: profile.avatarKey,
+            avatarUrl: avatarUrl
+        )
+        defaults.set(avatarUrl.absoluteString, forKey: Keys.avatarURL)
+        self.profile = updatedProfile
     }
 
     func signOut() {
@@ -72,6 +96,7 @@ final class CircleSessionStore: ObservableObject {
         defaults.removeObject(forKey: Keys.userID)
         defaults.removeObject(forKey: Keys.username)
         defaults.removeObject(forKey: Keys.avatarKey)
+        defaults.removeObject(forKey: Keys.avatarURL)
         profile = nil
         NotificationCenter.default.post(name: Self.didSignOutNotification, object: nil)
     }

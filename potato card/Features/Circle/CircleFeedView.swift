@@ -1856,7 +1856,7 @@ private struct CircleFeedAbstractArtwork: View {
     }
 }
 
-private struct CircleAvatarView: View {
+struct CircleAvatarView: View {
     let username: String
     let avatarKey: String
     let avatarUrl: URL?

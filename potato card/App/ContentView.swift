@@ -13,8 +13,8 @@ struct ContentView: View {
         case home
         case gallery
         case circle
-        case todo
         case skills
+        case me
     }
 
     private let accentColor = Color(red: 0.18, green: 0.49, blue: 0.98)
@@ -38,7 +38,7 @@ struct ContentView: View {
                 homeTab
             }
                 .tabItem {
-                    Label("设备", systemImage: "iphone")
+                    Label("首页", systemImage: "house")
                 }
                 .tag(Tab.home)
 
@@ -58,21 +58,21 @@ struct ContentView: View {
                 }
                 .tag(Tab.circle)
 
-            tabContent(.todo) {
-                todoTab
-            }
-                .tabItem {
-                    Label("待办", systemImage: "checklist")
-                }
-                .tag(Tab.todo)
-
             tabContent(.skills) {
                 skillsTab
             }
                 .tabItem {
-                    Label("skills", systemImage: "square.grid.2x2")
+                    Label("Skills", systemImage: "square.grid.2x2")
                 }
                 .tag(Tab.skills)
+
+            tabContent(.me) {
+                meTab
+            }
+                .tabItem {
+                    Label("我的", systemImage: "person.crop.circle")
+                }
+                .tag(Tab.me)
         }
         .tint(accentColor)
         .toolbarBackground(.hidden, for: .tabBar)
@@ -212,18 +212,6 @@ struct ContentView: View {
         }
     }
 
-    private var todoTab: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                backgroundColor
-                    .ignoresSafeArea()
-
-                TodoView()
-            }
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-
     private var skillsTab: some View {
         NavigationStack {
             ZStack(alignment: .top) {
@@ -238,6 +226,14 @@ struct ContentView: View {
                     .padding(.top, 0)
             }
             .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var meTab: some View {
+        NavigationStack {
+            MyView {
+                isDiagnosticsSheetPresented = true
+            }
         }
     }
 
@@ -279,7 +275,6 @@ struct ContentView: View {
 
                     HStack(spacing: 12) {
                         bluetoothStatusIcon
-                        diagnosticsSettingsButton
                         batteryStatusPill
                     }
                     .padding(.bottom, 25)
@@ -432,24 +427,6 @@ struct ContentView: View {
         }
     }
 
-    private var diagnosticsSettingsButton: some View {
-        Button {
-            isDiagnosticsSheetPresented = true
-        } label: {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(secondaryTextColor)
-                .frame(width: 34, height: 34)
-                .background(statusPillFillColor, in: Circle())
-                .overlay(
-                    Circle()
-                        .stroke(statusPillStrokeColor, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("设备设置")
-    }
-
     private var batteryStatusPill: some View {
         let percent = bleService.displayedBatteryPercent
         let color = batteryLevelColor(for: percent)
@@ -534,7 +511,10 @@ struct ContentView: View {
             loadedTabs.insert(.gallery)
 
             try? await Task.sleep(nanoseconds: 500_000_000)
-            loadedTabs.insert(.todo)
+            loadedTabs.insert(.skills)
+
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            loadedTabs.insert(.me)
         }
     }
 

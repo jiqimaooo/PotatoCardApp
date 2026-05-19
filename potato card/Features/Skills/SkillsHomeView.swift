@@ -22,6 +22,7 @@ struct SkillsHomeView: View {
                 header
                 weatherSkillCard
                 healthSkillSection
+                todoSkillCard
                 albumSkillCard
                 aiImageSkillCard
                 shortcutSettingsCard
@@ -166,6 +167,98 @@ struct SkillsHomeView: View {
     private var healthSkillSection: some View {
         HealthSkillSectionView()
             .environmentObject(bleService)
+    }
+
+    private var todoSkillCard: some View {
+        NavigationLink {
+            TodoView()
+        } label: {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.18, green: 0.72, blue: 0.54),
+                                        Color(red: 0.18, green: 0.49, blue: 0.98)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 42, height: 42)
+                            .overlay(
+                                Image(systemName: "checklist")
+                                    .font(.system(size: 19, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            )
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("待办")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(primaryTextColor)
+
+                            Text("把今日事项同步到土豆片")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(secondaryTextColor)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 8)
+                    }
+
+                    Text("清单管理 · 墨水屏展示")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(primaryTextColor.opacity(0.78))
+                        .lineLimit(1)
+
+                    Text("打开")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(cardFillColor.opacity(colorScheme == .dark ? 0.24 : 0.92))
+                    .frame(width: 88, height: 132)
+                    .overlay(
+                        VStack(alignment: .leading, spacing: 10) {
+                            Capsule()
+                                .fill(primaryTextColor.opacity(0.86))
+                                .frame(width: 42, height: 6)
+                            ForEach(0..<4, id: \.self) { index in
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .stroke(accentColor.opacity(index == 0 ? 0.95 : 0.45), lineWidth: 1.5)
+                                        .frame(width: 10, height: 10)
+                                    Capsule()
+                                        .fill(primaryTextColor.opacity(index == 0 ? 0.72 : 0.28))
+                                        .frame(width: index == 2 ? 40 : 54, height: 5)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(14)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(cardStrokeColor, lineWidth: 1)
+                    )
+            }
+            .padding(14)
+            .background(cardFillColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(cardStrokeColor, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
+            .frame(height: skillCardHeight)
+        }
+        .buttonStyle(.plain)
     }
 
     private var albumSkillCard: some View {
