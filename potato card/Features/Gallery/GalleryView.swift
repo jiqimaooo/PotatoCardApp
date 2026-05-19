@@ -845,40 +845,38 @@ struct GalleryImageViewer: View {
 
     private var devicePreview: some View {
         ZStack {
-            // 全屏调整状态下只显示当前照片并接所有手势；
-            // 预览状态下保持原有的 TabView，可以左右翻页。
-            // 注意：editableScreen 与 AdjustedPhotoPreview 共用同一套几何
-            // （baseScale / offsetScale / scaleEffect / rotationEffect / offset），
-            // 而且 screenPreview 也对「当前选中」那张读 draftAdjustment，所以
-            // expanded ↔ collapsed 切换时图片本身的位置 / 缩放 / 旋转完全一致，
-            // 用户感觉不到「图片跳一下」。
-            // 用 transaction 关闭这次 swap 自带的 cross-fade，避免「下拉时画面从
-            // 左上角滑到右下角」的视觉错觉。
-            if isExpanded, photos.indices.contains(selectedIndex) {
-                editableScreen(for: photos[selectedIndex])
-                    .frame(width: 186, height: 280)
-                    .mask(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .frame(width: 186, height: 280)
-                    )
-                    .offset(y: -19)
-                    .transition(.identity)
-            } else {
-                TabView(selection: $selectedIndex) {
-                    ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                        screenPreview(for: photo)
+            // 始终是一棵 TabView：expanded ↔ collapsed 切换时不再 swap view tree，
+            // 只是给「当前选中那张」的 photo screen 切手势开关。这样 SwiftUI 不会
+            // 在 detent 变化时给图片做位移动画（之前看到的「从左上向右下划」就是
+            // editableScreen 与 TabView 两个不同 view tree 的 cross-fade 引起的）。
+            // 全屏时禁用 TabView 翻页手势，避免编辑用的拖动跟翻页冲突。
+            TabView(selection: $selectedIndex) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                    screenPreview(for: photo)
                         .frame(width: 186, height: 280)
                         .tag(index)
-                    }
                 }
-                .frame(width: 186, height: 280)
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .mask(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .frame(width: 186, height: 280)
-                )
-                .offset(y: -19)
-                .transition(.identity)
+            }
+            .frame(width: 186, height: 280)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            // 编辑模式下关掉左右翻页，避免与拖动手势冲突。
+            .allowsHitTesting(isExpanded ? false : true)
+            .mask(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .frame(width: 186, height: 280)
+            )
+            .offset(y: -19)
+
+            // 编辑模式下，在 TabView 上面叠一层透明手势捕获层；
+            // 因为 TabView 内部的 SwiftUI Page 容器有时不会把 pinch / rotation 透
+            // 给子 View，独立一层手势捕获最稳。下面 photo 的几何已经在
+            // screenPreview/draftAdjustment 路径渲染，这一层只负责更新 draft。
+            if isExpanded, photos.indices.contains(selectedIndex) {
+                Color.clear
+                    .frame(width: 186, height: 280)
+                    .contentShape(Rectangle())
+                    .offset(y: -19)
+                    .gesture(editableCombinedGesture)
             }
 
             Image("ink_tatoo2")
@@ -934,29 +932,8 @@ struct GalleryImageViewer: View {
         }
     }
 
-    // 编辑模式下的预览：几何与 AdjustedPhotoPreview 同源，但读取 draftAdjustment
-    // 并接 pinch / rotate / drag 三者合手势。
-    @ViewBuilder
-    private func editableScreen(for photo: GalleryPhoto) -> some View {
-        GeometryReader { proxy in
-            let baseScale = max(proxy.size.width / photo.image.size.width, proxy.size.height / photo.image.size.height)
-            let offsetScale = min(proxy.size.width / renderTargetSize.width, proxy.size.height / renderTargetSize.height)
-
-            Image(uiImage: photo.image)
-                .resizable()
-                .interpolation(.medium)
-                .frame(width: photo.image.size.width * baseScale, height: photo.image.size.height * baseScale)
-                .scaleEffect(draftAdjustment.scale)
-                .rotationEffect(.radians(Double(draftAdjustment.rotation)))
-                .offset(x: draftAdjustment.offsetX * offsetScale, y: draftAdjustment.offsetY * offsetScale)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-        .background(Color.white)
-        .clipped()
-        .contentShape(Rectangle())
-        .gesture(editableCombinedGesture)
-    }
-
+    // 编辑模式下用到的手势：直接更新 draftAdjustment；几何已经在
+    // screenPreview 那一侧用 draftAdjustment 渲染了，所以这里只负责数值变更。
     private var editableCombinedGesture: some Gesture {
         let drag = DragGesture()
             .onChanged { value in

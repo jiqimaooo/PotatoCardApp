@@ -472,30 +472,29 @@ private struct AlbumImageViewer: View {
 
     private var albumFramedPreview: some View {
         ZStack {
-            if isExpanded, let image = UIImage(named: albums[selectedIndex]) {
-                editableScreen(for: image)
-                    .frame(width: 186, height: 280)
-                    .mask(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .frame(width: 186, height: 280)
-                    )
-                    .offset(y: -19)
-                    .transition(.identity)
-            } else {
-                TabView(selection: $selectedIndex) {
-                    ForEach(Array(albums.enumerated()), id: \.offset) { index, album in
-                        albumScreenImage(album)
-                            .tag(index)
-                    }
+            // 始终一棵 TabView，detent 切换时不再 swap view tree，避免
+            // SwiftUI 给 expanded ↔ collapsed 之间做隐式 cross-fade。
+            TabView(selection: $selectedIndex) {
+                ForEach(Array(albums.enumerated()), id: \.offset) { index, album in
+                    albumScreenImage(album)
+                        .tag(index)
                 }
-                .frame(width: 186, height: 280)
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .mask(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .frame(width: 186, height: 280)
-                )
-                .offset(y: -19)
-                .transition(.identity)
+            }
+            .frame(width: 186, height: 280)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .allowsHitTesting(isExpanded ? false : true)
+            .mask(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .frame(width: 186, height: 280)
+            )
+            .offset(y: -19)
+
+            if isExpanded {
+                Color.clear
+                    .frame(width: 186, height: 280)
+                    .contentShape(Rectangle())
+                    .offset(y: -19)
+                    .gesture(editableCombinedGesture)
             }
 
             Image("ink_tatoo2")
@@ -510,30 +509,8 @@ private struct AlbumImageViewer: View {
         // 看起来像预览顶多了一条白条。
     }
 
-    // 编辑模式下的可交互预览，几何与 EInkImageRenderer 同步，
-    // 用户看到的就是后续传输到设备实际呈现的画面。
-    @ViewBuilder
-    private func editableScreen(for image: UIImage) -> some View {
-        let renderTargetSize = activeDevice?.profile.pixelSize ?? EInkDeviceProfile.fallback.pixelSize
-        GeometryReader { proxy in
-            let baseScale = max(proxy.size.width / image.size.width, proxy.size.height / image.size.height)
-            let offsetScale = min(proxy.size.width / renderTargetSize.width, proxy.size.height / renderTargetSize.height)
-
-            Image(uiImage: image)
-                .resizable()
-                .interpolation(.medium)
-                .frame(width: image.size.width * baseScale, height: image.size.height * baseScale)
-                .scaleEffect(draftAdjustment.scale)
-                .rotationEffect(.radians(Double(draftAdjustment.rotation)))
-                .offset(x: draftAdjustment.offsetX * offsetScale, y: draftAdjustment.offsetY * offsetScale)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-        .background(Color.white)
-        .clipped()
-        .contentShape(Rectangle())
-        .gesture(editableCombinedGesture)
-    }
-
+    // 编辑模式下用到的手势：只更新 draftAdjustment；几何在 albumScreenImage 里
+    // 用 draftAdjustment 直接渲染，所以拖动 / 缩放 / 旋转能实时反映到 TabView 内。
     private var editableCombinedGesture: some Gesture {
         let drag = DragGesture()
             .onChanged { value in
