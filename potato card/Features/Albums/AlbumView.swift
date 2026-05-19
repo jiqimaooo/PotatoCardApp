@@ -408,6 +408,8 @@ private struct AlbumImageViewer: View {
     private func expandToEdit() { enterEditMode() }
 
     private func collapseToPreview() {
+        // 同步持久化：避免 onChange 异步 + body 同步重渲染造成的「图片跳一下」。
+        persistDraftIfNeeded()
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
             selectedDetent = .height(560)
         }
@@ -478,6 +480,7 @@ private struct AlbumImageViewer: View {
                             .frame(width: 186, height: 280)
                     )
                     .offset(y: -19)
+                    .transition(.identity)
             } else {
                 TabView(selection: $selectedIndex) {
                     ForEach(Array(albums.enumerated()), id: \.offset) { index, album in
@@ -492,6 +495,7 @@ private struct AlbumImageViewer: View {
                         .frame(width: 186, height: 280)
                 )
                 .offset(y: -19)
+                .transition(.identity)
             }
 
             Image("ink_tatoo2")
@@ -564,12 +568,20 @@ private struct AlbumImageViewer: View {
     private func clampRotation(_ value: CGFloat) -> CGFloat { min(max(value, -.pi), .pi) }
 
     // 「土豆片屏幕」内的非编辑模式预览，应用已保存的调整。
+    // 当前选中那张图直接读 draftAdjustment，避免下拉 detent 时 onChange 异步触
+    // 发 persistDraftIfNeeded、body 已经先渲染一遍读到旧 storage 值造成的「图片
+    // 跳一下回到上次保存位置」。
     private func albumScreenImage(_ album: String) -> some View {
-        let savedAdjustment = TransferEditStateStore.load(for: .album(album)) ?? .default
+        let adjustment: EInkManualAdjustment = {
+            if albums.indices.contains(selectedIndex), album == albums[selectedIndex] {
+                return draftAdjustment
+            }
+            return TransferEditStateStore.load(for: .album(album)) ?? .default
+        }()
         let renderTargetSize = activeDevice?.profile.pixelSize ?? EInkDeviceProfile.fallback.pixelSize
         return GeometryReader { proxy in
             if let image = UIImage(named: album) {
-                if savedAdjustment == .default {
+                if adjustment == .default {
                     Image(album)
                         .resizable()
                         .scaledToFill()
@@ -582,9 +594,9 @@ private struct AlbumImageViewer: View {
                         .resizable()
                         .interpolation(.medium)
                         .frame(width: image.size.width * baseScale, height: image.size.height * baseScale)
-                        .scaleEffect(savedAdjustment.scale)
-                        .rotationEffect(.radians(Double(savedAdjustment.rotation)))
-                        .offset(x: savedAdjustment.offsetX * offsetScale, y: savedAdjustment.offsetY * offsetScale)
+                        .scaleEffect(adjustment.scale)
+                        .rotationEffect(.radians(Double(adjustment.rotation)))
+                        .offset(x: adjustment.offsetX * offsetScale, y: adjustment.offsetY * offsetScale)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .background(Color.white)
                         .clipped()

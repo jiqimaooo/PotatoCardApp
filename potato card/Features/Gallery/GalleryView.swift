@@ -668,7 +668,10 @@ struct GalleryImageViewer: View {
     }
 
     private func collapseToPreview() {
-        // 主动收起同时会触发 onChange(of: isExpanded)，那边统一调用 persistDraftIfNeeded。
+        // 同步先持久化：onChange(of: isExpanded) 是异步的，body 会在那之前
+        // 重新渲染一次，screenPreview 又会按 storage 读取「上一次保存的值」，
+        // 视觉上等同于「编辑完下拉时图片回到上次保存位置再跳回来」。
+        persistDraftIfNeeded()
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
             selectedDetent = .height(560)
         }
@@ -844,6 +847,13 @@ struct GalleryImageViewer: View {
         ZStack {
             // 全屏调整状态下只显示当前照片并接所有手势；
             // 预览状态下保持原有的 TabView，可以左右翻页。
+            // 注意：editableScreen 与 AdjustedPhotoPreview 共用同一套几何
+            // （baseScale / offsetScale / scaleEffect / rotationEffect / offset），
+            // 而且 screenPreview 也对「当前选中」那张读 draftAdjustment，所以
+            // expanded ↔ collapsed 切换时图片本身的位置 / 缩放 / 旋转完全一致，
+            // 用户感觉不到「图片跳一下」。
+            // 用 transaction 关闭这次 swap 自带的 cross-fade，避免「下拉时画面从
+            // 左上角滑到右下角」的视觉错觉。
             if isExpanded, photos.indices.contains(selectedIndex) {
                 editableScreen(for: photos[selectedIndex])
                     .frame(width: 186, height: 280)
@@ -852,6 +862,7 @@ struct GalleryImageViewer: View {
                             .frame(width: 186, height: 280)
                     )
                     .offset(y: -19)
+                    .transition(.identity)
             } else {
                 TabView(selection: $selectedIndex) {
                     ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
@@ -867,6 +878,7 @@ struct GalleryImageViewer: View {
                         .frame(width: 186, height: 280)
                 )
                 .offset(y: -19)
+                .transition(.identity)
             }
 
             Image("ink_tatoo2")
@@ -894,10 +906,20 @@ struct GalleryImageViewer: View {
 
     @ViewBuilder
     private func screenPreview(for photo: GalleryPhoto) -> some View {
+        // 当前选中的那张图：直接读 draftAdjustment，避免「编辑完下拉 → body 已经
+        // 重新渲染，但 onChange(of: isExpanded) 里的 persistDraftIfNeeded 尚未写
+        // 回 TransferEditStateStore」造成一帧读到旧 saved 值的竞争（表现就是图片
+        // 突然从编辑位置滑回未编辑位置）。其余照片走存储里的值，确保 TabView 翻
+        // 页时看到各自的已保存调整。
+        let adjustment: EInkManualAdjustment =
+            (photos.indices.contains(selectedIndex) && photo.id == photos[selectedIndex].id)
+                ? draftAdjustment
+                : savedAdjustment(for: photo)
+
         if isContentLocked {
             LockedPhotoPreview(
                 image: photo.image,
-                adjustment: savedAdjustment(for: photo),
+                adjustment: adjustment,
                 screenSize: CGSize(width: 186, height: 280),
                 renderTargetSize: renderTargetSize,
                 message: lockedPreviewText
@@ -905,7 +927,7 @@ struct GalleryImageViewer: View {
         } else {
             AdjustedPhotoPreview(
                 image: photo.image,
-                adjustment: savedAdjustment(for: photo),
+                adjustment: adjustment,
                 screenSize: CGSize(width: 186, height: 280),
                 renderTargetSize: renderTargetSize
             )
