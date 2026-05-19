@@ -2,16 +2,14 @@
 //  GalleryShareFlow.swift
 //  potato card
 //
-//  长按相册照片 → 分享到圈子 / 分享到漂流瓶 的容器视图与图片准备工具。
+//  长按相册照片 → 分享到圈子 / 分享到漂流瓶 的容器。
 //
-//  - GallerySharePreparer: 把任意 GalleryPhoto 按用户保存过的「手动调整」渲染成
-//    400×600 的 JPEG，作为圈子 / 漂流瓶上传的统一素材。
 //  - GalleryShareDestination: 区分两条分享链路。
-//  - GalleryShareSheet: 入口容器；未登录时先弹出 CircleRegistrationView，
-//    注册 / 登录成功后自动切到对应的发布界面。
-//
-//  注：复用 Circle 模块已有的 CirclePostComposerView /
-//  CircleDriftBottleThrowComposerView，本文件只负责调度与登录拦截。
+//  - GallerySharePreparer: 给一张图 + 一份 EInkManualAdjustment 渲染 400×600 JPEG。
+//  - GalleryShareSheet: 入口；负责三段式状态机 — 未登录注册 → 交互式裁切 → 发布。
+//  - GalleryShareAdjustmentView: 400×600 canvas 上的可交互裁切 + 滑块，
+//    与 InteractiveDevicePreview 同源的几何与手势，但画布严格按上传比例显示，
+//    用户看到的就是真正会传给服务端的内容。
 //
 
 import Foundation
@@ -46,6 +44,15 @@ enum GalleryShareDestination: Identifiable {
             return "扔进漂流瓶"
         }
     }
+
+    var continueButtonTitle: String {
+        switch self {
+        case .circle:
+            return "下一步"
+        case .driftBottle:
+            return "下一步"
+        }
+    }
 }
 
 enum GallerySharePreparer {
@@ -54,18 +61,21 @@ enum GallerySharePreparer {
     static let shareCanvasSize = CGSize(width: 400, height: 600)
     private static let shareJPEGCompressionQuality: CGFloat = 0.85
 
-    static func preparedShareImageData(for photo: GalleryPhoto) -> Data? {
-        let adjustment = TransferEditStateStore.load(for: .gallery(photo.id)) ?? .default
-        // 跟 GalleryView.startTransfer 一致：只有真正保存过非默认调整才走 .manual，
-        // 默认情况仍然按 .centerCrop 居中裁切，避免给从未编辑过的图引入空白边。
-        let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
+    // 按调用方传入的 EInkManualAdjustment 渲染 400×600 JPEG。
+    // 与 EInkImageRenderer.render 完全同源，所以「裁切 UI 看到的画面」≡
+    // 「上传给服务端的画面」≡「最终别人传到墨水屏的画面」。
+    static func renderShareImageData(
+        for image: UIImage,
+        adjustment: EInkManualAdjustment
+    ) -> Data? {
+        let fitMode: EInkImageFitMode = .manual
         let rendered = EInkImageRenderer.render(
-            image: photo.image,
+            image: image,
             targetSize: shareCanvasSize,
             fitMode: fitMode,
             adjustment: adjustment
         )
-        return rendered.jpegData(compressionQuality: shareJPEGCompressionQuality) ?? photo.imageData
+        return rendered.jpegData(compressionQuality: shareJPEGCompressionQuality)
     }
 }
 
@@ -78,7 +88,10 @@ struct GalleryShareSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var sessionStore = CircleSessionStore()
-    @State private var status: PublishStatus = .idle
+    // 三段式状态机：
+    //   nil       → 还在「调整」步骤，让用户拖拽 / 缩放 / 旋转。
+    //   非 nil    → 已经渲染好 400×600 数据，切到「发布」步骤的 composer。
+    @State private var preparedImageData: Data?
     private let apiClient = GalleryShareSheet.defaultAPIClient()
 
     init(
@@ -91,21 +104,27 @@ struct GalleryShareSheet: View {
         self.onPublishFailed = onPublishFailed
     }
 
-    private enum PublishStatus {
-        case idle
-        case uploading
-        case succeeded
-        case failed(String)
-    }
-
     var body: some View {
         Group {
-            if sessionStore.isRegistered {
-                publishContent
-            } else {
-                // 未登录：先走 Circle 自己的注册 / 登录视图，
-                // 登录成功后 isRegistered 切到 true，外层 Group 自动换到 publishContent。
+            if !sessionStore.isRegistered {
+                // 阶段 1：未登录 → 先走注册 / 登录视图。
+                // 登录成功后 isRegistered 切到 true，自动进入阶段 2。
                 CircleRegistrationView(sessionStore: sessionStore, apiClient: apiClient)
+            } else if preparedImageData == nil {
+                // 阶段 2：交互式 400×600 裁切。点「下一步」后渲染出 JPEG。
+                GalleryShareAdjustmentView(
+                    photo: destination.photo,
+                    destination: destination,
+                    onContinue: { renderedData in
+                        // SwiftUI 不会因为闭包结尾的赋值产生额外动画，主动加 animation 让两步切换更顺滑。
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            preparedImageData = renderedData
+                        }
+                    }
+                )
+            } else if let imageData = preparedImageData {
+                // 阶段 3：复用 Circle 现有 composer，传入预渲染好的 400×600 数据。
+                publishContent(imageData: imageData)
             }
         }
         .onAppear {
@@ -120,30 +139,29 @@ struct GalleryShareSheet: View {
     }
 
     @ViewBuilder
-    private var publishContent: some View {
+    private func publishContent(imageData: Data) -> some View {
         switch destination {
-        case .circle(let photo):
+        case .circle:
             CirclePostComposerView(
-                initialImageData: GallerySharePreparer.preparedShareImageData(for: photo),
+                initialImageData: imageData,
                 allowsPhotoChange: false
-            ) { imageData, title, tags in
-                Task { await publishCircle(imageData: imageData, title: title, tags: tags) }
+            ) { data, title, tags in
+                Task { await publishCircle(imageData: data, title: title, tags: tags) }
             }
-        case .driftBottle(let photo):
+        case .driftBottle:
             CircleDriftBottleThrowComposerView(
-                initialImageData: GallerySharePreparer.preparedShareImageData(for: photo),
+                initialImageData: imageData,
                 allowsPhotoChange: false
-            ) { imageData in
-                Task { await publishDriftBottle(imageData: imageData) }
+            ) { data in
+                Task { await publishDriftBottle(imageData: data) }
             }
         }
     }
 
-    // MARK: - 上传逻辑（最小化复刻 CircleView，避免把整套相册模块依赖到 Circle 内部）
+    // MARK: - 上传逻辑（与 CircleView 同源；refresh 一次以容忍短期 401）
 
     @MainActor
     private func publishCircle(imageData: Data, title: String, tags: [String]) async {
-        status = .uploading
         do {
             let token = try await validAccessToken()
             do {
@@ -152,19 +170,15 @@ struct GalleryShareSheet: View {
                 let refreshed = try await validAccessToken(forceRefresh: true)
                 try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshed)
             }
-            status = .succeeded
             onPublishSucceeded?(destination)
             dismiss()
         } catch {
-            let message = error.localizedDescription
-            status = .failed(message)
-            onPublishFailed?(message)
+            onPublishFailed?(error.localizedDescription)
         }
     }
 
     @MainActor
     private func publishDriftBottle(imageData: Data) async {
-        status = .uploading
         do {
             let token = try await validAccessToken()
             do {
@@ -173,13 +187,10 @@ struct GalleryShareSheet: View {
                 let refreshed = try await validAccessToken(forceRefresh: true)
                 try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: refreshed)
             }
-            status = .succeeded
             onPublishSucceeded?(destination)
             dismiss()
         } catch {
-            let message = error.localizedDescription
-            status = .failed(message)
-            onPublishFailed?(message)
+            onPublishFailed?(error.localizedDescription)
         }
     }
 
@@ -206,5 +217,258 @@ struct GalleryShareSheet: View {
                 return token.isEmpty ? nil : token
             }
         )
+    }
+}
+
+// MARK: - Adjustment Step
+
+// 400×600 canvas 上的可交互裁切；几何 / 手势与 InteractiveDevicePreview 同源，
+// 但画布严格按 2:3 显示，且 baseDrawRect 计算的 targetSize 也是 400×600，
+// 所以用户在屏幕上看到的 = jpegData 之后实际上传的内容。
+struct GalleryShareAdjustmentView: View {
+    let photo: GalleryPhoto
+    let destination: GalleryShareDestination
+    let onContinue: (Data) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var adjustment: EInkManualAdjustment
+    @State private var gestureScaleStart: CGFloat = 1
+    @State private var gestureRotationStart: CGFloat = 0
+    @State private var gestureOffsetStart: CGSize = .zero
+    @State private var isRendering = false
+
+    init(
+        photo: GalleryPhoto,
+        destination: GalleryShareDestination,
+        onContinue: @escaping (Data) -> Void
+    ) {
+        self.photo = photo
+        self.destination = destination
+        self.onContinue = onContinue
+        // 用同一份 .gallery 调整作为初始值：用户在 TransferSheetView 里已经调过的图
+        // 进入分享流程时不需要从头再调。
+        let saved = TransferEditStateStore.load(for: .gallery(photo.id))
+        _adjustment = State(initialValue: saved ?? .default)
+    }
+
+    private var targetSize: CGSize { GallerySharePreparer.shareCanvasSize }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Spacer(minLength: 12)
+
+                cropCanvas
+                    .padding(.horizontal, 24)
+
+                Spacer(minLength: 12)
+
+                Form {
+                    Section {
+                        sliderRow(title: "缩放", value: $adjustment.scale, range: 0.25...3, format: scalePercent)
+                        sliderRow(title: "旋转", value: $adjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+                        sliderRow(title: "水平", value: $adjustment.offsetX, range: -160...160, format: offsetText)
+                        sliderRow(title: "垂直", value: $adjustment.offsetY, range: -160...160, format: offsetText)
+                    } header: {
+                        HStack {
+                            Text("手动调整")
+                            Spacer()
+                            if adjustment != .default {
+                                Button("重置") {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        adjustment = .default
+                                    }
+                                }
+                                .font(.footnote)
+                            }
+                        }
+                    } footer: {
+                        Text("画框 = 400 × 600，是真正上传给服务端的尺寸。")
+                            .font(.footnote)
+                    }
+                }
+                .scrollDisabled(true)
+                .frame(maxHeight: 320)
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomActionBar
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .principal) {
+                    Text(destination.navigationTitle)
+                        .font(.headline)
+                }
+            }
+        }
+    }
+
+    // MARK: 400×600 canvas
+
+    private var cropCanvas: some View {
+        // 维持 2:3 (400:600 = 2:3) 比例，最大不超过屏幕的合理范围。
+        GeometryReader { proxy in
+            let maxWidth: CGFloat = min(proxy.size.width, 280)
+            let maxHeight: CGFloat = min(proxy.size.height, maxWidth * (targetSize.height / targetSize.width))
+            let width: CGFloat = min(maxWidth, maxHeight * (targetSize.width / targetSize.height))
+            let height: CGFloat = width * (targetSize.height / targetSize.width)
+
+            ZStack {
+                cropScreen
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 8)
+                    .gesture(combinedGesture)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .aspectRatio(targetSize.width / targetSize.height, contentMode: .fit)
+    }
+
+    private var cropScreen: some View {
+        GeometryReader { proxy in
+            // 与 InteractiveDevicePreview 完全同源的几何公式：
+            //   baseScale = max(canvasW / imgW, canvasH / imgH)  → 居中铺满
+            //   offsetScale 把存储的 offsetX/Y (单位: targetSize 像素) 映射到当前预览的 point。
+            let baseScale = max(proxy.size.width / photo.image.size.width, proxy.size.height / photo.image.size.height)
+            let offsetScale = min(proxy.size.width / targetSize.width, proxy.size.height / targetSize.height)
+
+            Image(uiImage: photo.image)
+                .resizable()
+                .interpolation(.medium)
+                .frame(width: photo.image.size.width * baseScale, height: photo.image.size.height * baseScale)
+                .scaleEffect(adjustment.scale)
+                .rotationEffect(.radians(Double(adjustment.rotation)))
+                .offset(x: adjustment.offsetX * offsetScale, y: adjustment.offsetY * offsetScale)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .background(Color.white)
+        .clipped()
+        .contentShape(Rectangle())
+    }
+
+    private var combinedGesture: some Gesture {
+        let drag = DragGesture()
+            .onChanged { value in
+                adjustment.offsetX = clampOffset(gestureOffsetStart.width + value.translation.width)
+                adjustment.offsetY = clampOffset(gestureOffsetStart.height + value.translation.height)
+            }
+            .onEnded { _ in
+                gestureOffsetStart = CGSize(width: adjustment.offsetX, height: adjustment.offsetY)
+            }
+
+        let magnify = MagnificationGesture()
+            .onChanged { value in
+                adjustment.scale = clampScale(gestureScaleStart * value)
+            }
+            .onEnded { _ in
+                gestureScaleStart = adjustment.scale
+            }
+
+        let rotate = RotationGesture()
+            .onChanged { angle in
+                adjustment.rotation = clampRotation(gestureRotationStart + CGFloat(angle.radians))
+            }
+            .onEnded { _ in
+                gestureRotationStart = adjustment.rotation
+            }
+
+        return SimultaneousGesture(SimultaneousGesture(magnify, rotate), drag)
+    }
+
+    private func clampScale(_ value: CGFloat) -> CGFloat { min(max(value, 0.25), 3) }
+    private func clampOffset(_ value: CGFloat) -> CGFloat { min(max(value, -160), 160) }
+    private func clampRotation(_ value: CGFloat) -> CGFloat { min(max(value, -.pi), .pi) }
+
+    // MARK: 底部 CTA
+
+    private var bottomActionBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                continueToPublish()
+            } label: {
+                HStack(spacing: 8) {
+                    if isRendering {
+                        ProgressView().controlSize(.small).tint(.white)
+                    }
+                    Text(destination.continueButtonTitle)
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(
+                    RoundedRectangle(cornerRadius: 25, style: .continuous)
+                        .fill(Color(red: 0.0, green: 0.48, blue: 1.0))
+                )
+                .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .disabled(isRendering)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .background(.bar)
+        }
+    }
+
+    private func continueToPublish() {
+        guard !isRendering else { return }
+        isRendering = true
+        // 切到后台线程做 renderer + jpeg 编码，避免在主线程卡顿。
+        let currentImage = photo.image
+        let currentAdjustment = adjustment
+        Task.detached(priority: .userInitiated) {
+            let data = GallerySharePreparer.renderShareImageData(
+                for: currentImage,
+                adjustment: currentAdjustment
+            )
+            await MainActor.run {
+                isRendering = false
+                guard let data else { return }
+                onContinue(data)
+            }
+        }
+    }
+
+    // MARK: 滑块格式化
+
+    private func sliderRow(
+        title: String,
+        value: Binding<CGFloat>,
+        range: ClosedRange<CGFloat>,
+        format: @escaping (CGFloat) -> String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent(title) {
+                Text(format(value.wrappedValue))
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .font(.subheadline)
+
+            Slider(value: value, in: range)
+        }
+    }
+
+    private func scalePercent(_ value: CGFloat) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func rotationDegrees(_ value: CGFloat) -> String {
+        let degrees = value * 180 / .pi
+        return String(format: "%.0f°", degrees)
+    }
+
+    private func offsetText(_ value: CGFloat) -> String {
+        "\(Int(value.rounded()))"
     }
 }

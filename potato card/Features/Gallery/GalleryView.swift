@@ -21,6 +21,9 @@ struct GalleryView: View {
     // 长按缩略图触发的「分享到圈子 / 漂流瓶」入口。
     @State private var shareDestination: GalleryShareDestination?
     @State private var shareToast: String?
+    // 从一级 viewer 顶部分享菜单触发时，把目标先存这里，等 viewer dismiss 动画结束再开
+    // share sheet，避免两张 sheet 在同一帧重叠出现「两张卡片」。
+    @State private var pendingShareAfterDismiss: GalleryShareDestination?
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 3),
@@ -56,10 +59,26 @@ struct GalleryView: View {
                 photos: set.photos,
                 initialIndex: set.initialIndex,
                 onTransferToDevice: onTransferToDevice,
-                onRenamePhoto: handleRenamePhoto
+                onRenamePhoto: handleRenamePhoto,
+                onRequestShare: { destination in
+                    // viewer 把分享请求挂到 GalleryView，等下面 onChange 检测到 viewer
+                    // 真正被 dismiss 后再展示 share sheet，避免两张 sheet 同时出现。
+                    pendingShareAfterDismiss = destination
+                }
             )
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
+        }
+        .onChange(of: selectedPhotoSet?.id) { newID in
+            // viewer 关闭瞬间触发：把挂起的分享目标接力到 shareDestination sheet。
+            guard newID == nil, let pending = pendingShareAfterDismiss else { return }
+            pendingShareAfterDismiss = nil
+            Task { @MainActor in
+                // 等 viewer 的 dismiss 动画走完再开 share sheet，
+                // 没有这个延时 SwiftUI 会拒绝二次 sheet（item 设置被忽略）。
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                shareDestination = pending
+            }
         }
         .sheet(item: $adjustingPhoto) { photo in
             // 长按 → 调整：直接打开二级手动调整面板，与一级页面用的是同一个组件。
@@ -354,7 +373,6 @@ struct GalleryImageViewer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedIndex: Int
-    @State private var transferRequest: GalleryTransferRequest?
     @State private var pendingTransferData: Data?
     @State private var pendingTransferImage: UIImage?
     @State private var isPreparingTransferImage = false
@@ -363,10 +381,23 @@ struct GalleryImageViewer: View {
     @State private var customizedPhotoIDs: Set<UUID> = []
     // 在 sheet 里修改过名称后本地缓存，只读走外层 photos 会丢掉变更。
     @State private var renamedTitles: [UUID: String] = [:]
-    // 当前向上滑的累计位移，用来给底部胶囊一个跟手的反馈动画。
+    // “原地调整”状态机：viewer 不再叠一层 sheet，而是让同一张“土豆片”
+    // 卡片直接变成可交互的编辑面板。isEditing == true 时：
+    //   · 底部按钮 morph 为滑块 + 取消/保存
+    //   · 屏幕照片接手与提供拖动 / 双指缩放 / 旋转
+    //   · TabView 换成单图显示，避免编辑手势与翻页手势冲突
+    @State private var isEditing = false
+    @State private var draftAdjustment = EInkManualAdjustment.default
+    @State private var gestureScaleStart: CGFloat = 1
+    @State private var gestureRotationStart: CGFloat = 0
+    @State private var gestureOffsetStart: CGSize = .zero
+    // 底部上滑累计位移：仅用于判断是否达到进入编辑阈值，不再驱动提示胶囊动画。
     @State private var swipeUpDragOffset: CGFloat = 0
-    // 阈值：累计向上拖到 -56pt 之后松手即触发手动调整面板。
     private let swipeUpTriggerThreshold: CGFloat = 56
+
+    // 点击 toolbar 右上角分享 → 由外层 GalleryView 接管并在 viewer dismiss 后弹分享 sheet，
+    // 避免继续出现两张 sheet 叠加在一起的“两张卡片”状况。
+    var onRequestShare: ((GalleryShareDestination) -> Void)? = nil
 
     init(
         photos: [GalleryPhoto],
@@ -377,7 +408,8 @@ struct GalleryImageViewer: View {
         isContentLocked: Bool = false,
         lockedPreviewText: String = "点击传输以查看",
         transferButtonTitle: String = "传输到设备",
-        onRenamePhoto: ((UUID, String) -> Void)? = nil
+        onRenamePhoto: ((UUID, String) -> Void)? = nil,
+        onRequestShare: ((GalleryShareDestination) -> Void)? = nil
     ) {
         self.photos = photos
         self.initialIndex = initialIndex
@@ -388,6 +420,7 @@ struct GalleryImageViewer: View {
         self.lockedPreviewText = lockedPreviewText
         self.transferButtonTitle = transferButtonTitle
         self.onRenamePhoto = onRenamePhoto
+        self.onRequestShare = onRequestShare
         _selectedIndex = State(initialValue: initialIndex)
     }
 
@@ -407,66 +440,24 @@ struct GalleryImageViewer: View {
                 VStack {
                     Spacer()
 
-                    VStack(spacing: 10) {
-                        transferStatusView
-
-                        Button(action: transferSelectedPhotoDirectly) {
-                            transferButtonLabel
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(activeDevice == nil)
-
-                        if !isContentLocked {
-                            // 次操作：使用系统 bordered + capsule。当照片有非默认调整时把 tint 设为
-                            // .yellow（系统强调色之一，自动适配暗色模式），保留“黄色提示”语义。
-                            Button(action: openManualAdjustment) {
-                                Label("手动调整", systemImage: "slider.horizontal.3")
-                                    .frame(minWidth: 100)
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.capsule)
-                            .controlSize(.regular)
-                            .tint(currentPhotoIsCustomized ? .yellow : .secondary)
-                            .disabled(isTransferInProgress)
-                        }
-
-                        if !isContentLocked {
-                            swipeUpHintBar
-                                .padding(.top, 2)
-                        }
-                    }
-                    .padding(.bottom, isContentLocked ? 28 : 10)
-                    .offset(y: (isContentLocked ? 0 : 20) - max(0, -swipeUpDragOffset) * 0.18)
+                    bottomContent
+                        .padding(.bottom, isContentLocked ? 28 : 10)
+                        .offset(y: isContentLocked ? 0 : 20)
+                        .animation(.spring(response: 0.36, dampingFraction: 0.84), value: isEditing)
                 }
                 .contentShape(Rectangle())
-                .simultaneousGesture(isContentLocked ? nil : swipeUpGesture)
+                .simultaneousGesture((isContentLocked || isEditing) ? nil : swipeUpGesture)
                 .accessibilityAction(named: "进入手动调整") {
-                    guard !isContentLocked, !isTransferInProgress else { return }
-                    openManualAdjustment()
+                    guard !isContentLocked, !isTransferInProgress, !isEditing else { return }
+                    enterEditMode()
                 }
             }
-            .sheet(item: $transferRequest) { request in
-                TransferSheetView(
-                    sourceImage: request.photo.image,
-                    title: renamedTitles[request.photo.id] ?? request.photo.title,
-                    editStateKey: editStateKeyForPhoto(request.photo),
-                    onTransferSucceeded: {
-                        onTransferToDevice(request.photo.imageData)
-                        dismiss()
-                    },
-                    onRename: onRenamePhoto.map { rename in
-                        { newTitle in
-                            renamedTitles[request.photo.id] = newTitle
-                            rename(request.photo.id, newTitle)
-                        }
-                    }
-                )
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-            }
-            .onChange(of: transferRequest?.id) { _ in
-                // sheet 打开/关闭后重新加载调整状态，让一级页面的预览和黄色指示同步更新。
-                refreshCustomizedPhotoIDs()
+            .onChange(of: selectedIndex) { _ in
+                // 切到另一张图时，如果当前在编辑模式，把草稿重新对齐到新图的已保存值。
+                if isEditing {
+                    draftAdjustment = savedAdjustment(for: photos[selectedIndex])
+                    resetGestureBaselines()
+                }
             }
             .task {
                 refreshCustomizedPhotoIDs()
@@ -487,9 +478,205 @@ struct GalleryImageViewer: View {
                         Text(toolbarTitle)
                             .font(.headline)
                     }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        // 编辑模式下不显示分享菜单；保存 / 取消由底部主操作区接管，
+                        // 避免顶部和底部出现两套并行的退出入口。
+                        if !isEditing, let onRequestShare {
+                            shareMenu(onRequestShare: onRequestShare)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    // MARK: - Bottom morph
+
+    @ViewBuilder
+    private var bottomContent: some View {
+        if isEditing {
+            editingControls
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                    removal: .opacity
+                ))
+        } else {
+            viewerControls
+                .transition(.asymmetric(
+                    insertion: .opacity,
+                    removal: .opacity.combined(with: .move(edge: .bottom))
+                ))
+        }
+    }
+
+    private var viewerControls: some View {
+        VStack(spacing: 10) {
+            transferStatusView
+
+            Button(action: transferSelectedPhotoDirectly) {
+                transferButtonLabel
+            }
+            .buttonStyle(.plain)
+            .disabled(activeDevice == nil)
+
+            if !isContentLocked {
+                Button {
+                    enterEditMode()
+                } label: {
+                    Label("手动调整", systemImage: "slider.horizontal.3")
+                        .frame(minWidth: 100)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.regular)
+                .tint(currentPhotoIsCustomized ? .yellow : .secondary)
+                .disabled(isTransferInProgress)
+            }
+        }
+    }
+
+    private var editingControls: some View {
+        // 内嵌的调整面板：滑块与 TransferSheetView 的几何完全一致，
+        // 但所有操作就地完成，没有第二张 sheet / 卡片堆叠。
+        VStack(spacing: 12) {
+            VStack(spacing: 4) {
+                sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
+                sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+                sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
+                sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
+            }
+            .padding(.horizontal, 16)
+
+            HStack(spacing: 12) {
+                Button(role: .cancel) {
+                    cancelEditMode()
+                } label: {
+                    Text("取消")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.regular)
+
+                Button {
+                    saveEditMode()
+                } label: {
+                    Text("保存")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.regular)
+            }
+            .padding(.horizontal, 16)
+        }
+        .background(
+            // 给底部加一层浅薄的 .bar 材质，让滑块从视觉上脱离背景，
+            // 而不是浮在透明区域上。
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.bar)
+                .padding(.horizontal, 8)
+        )
+        .padding(.horizontal, -8)
+    }
+
+    private func sliderRow(
+        title: String,
+        value: Binding<CGFloat>,
+        range: ClosedRange<CGFloat>,
+        format: @escaping (CGFloat) -> String
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .leading)
+
+            Slider(value: value, in: range)
+
+            Text(format(value.wrappedValue))
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    private func scalePercent(_ value: CGFloat) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func rotationDegrees(_ value: CGFloat) -> String {
+        let degrees = value * 180 / .pi
+        return String(format: "%.0f°", degrees)
+    }
+
+    private func offsetText(_ value: CGFloat) -> String {
+        "\(Int(value.rounded()))"
+    }
+
+    // 顶部 toolbar 分享菜单
+    @ViewBuilder
+    private func shareMenu(onRequestShare: @escaping (GalleryShareDestination) -> Void) -> some View {
+        Menu {
+            Button {
+                let photo = photos[selectedIndex]
+                onRequestShare(.circle(photo: photo))
+                dismiss()
+            } label: {
+                Label("分享到圈子", systemImage: "person.2.circle")
+            }
+
+            Button {
+                let photo = photos[selectedIndex]
+                onRequestShare(.driftBottle(photo: photo))
+                dismiss()
+            } label: {
+                Label("分享到漂流瓶", systemImage: "paperplane")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 16, weight: .semibold))
+        }
+        .accessibilityLabel("分享")
+    }
+
+    // MARK: - Edit-mode helpers
+
+    private func enterEditMode() {
+        guard !isTransferInProgress else { return }
+        draftAdjustment = savedAdjustment(for: photos[selectedIndex])
+        resetGestureBaselines()
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+            isEditing = true
+        }
+    }
+
+    private func saveEditMode() {
+        let photo = photos[selectedIndex]
+        let key = editStateKeyForPhoto(photo)
+        if draftAdjustment == .default {
+            TransferEditStateStore.delete(for: key)
+        } else {
+            TransferEditStateStore.save(draftAdjustment, for: key)
+        }
+        refreshCustomizedPhotoIDs()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            isEditing = false
+        }
+    }
+
+    private func cancelEditMode() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            isEditing = false
+        }
+    }
+
+    private func resetGestureBaselines() {
+        gestureScaleStart = draftAdjustment.scale
+        gestureRotationStart = draftAdjustment.rotation
+        gestureOffsetStart = CGSize(width: draftAdjustment.offsetX, height: draftAdjustment.offsetY)
     }
 
     @ViewBuilder
@@ -551,12 +738,6 @@ struct GalleryImageViewer: View {
         pendingTransferData = imageData
         pendingTransferImage = displayImage
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
-    }
-
-    private func openManualAdjustment() {
-        pendingTransferData = nil
-        pendingTransferImage = nil
-        transferRequest = GalleryTransferRequest(photo: photos[selectedIndex])
     }
 
     private func transferImage(
@@ -648,20 +829,32 @@ struct GalleryImageViewer: View {
 
     private var devicePreview: some View {
         ZStack {
-            TabView(selection: $selectedIndex) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                    screenPreview(for: photo)
+            // 编辑模式下只显示当前照片并接所有手势；
+            // 非编辑模式下保持原有的 TabView，可以左右翻页。
+            if isEditing, photos.indices.contains(selectedIndex) {
+                editableScreen(for: photos[selectedIndex])
                     .frame(width: 186, height: 280)
-                    .tag(index)
+                    .mask(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .frame(width: 186, height: 280)
+                    )
+                    .offset(y: -19)
+            } else {
+                TabView(selection: $selectedIndex) {
+                    ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                        screenPreview(for: photo)
+                        .frame(width: 186, height: 280)
+                        .tag(index)
+                    }
                 }
+                .frame(width: 186, height: 280)
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .mask(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .frame(width: 186, height: 280)
+                )
+                .offset(y: -19)
             }
-            .frame(width: 186, height: 280)
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .mask(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .frame(width: 186, height: 280)
-            )
-            .offset(y: -19)
 
             Image("ink_tatoo2")
                 .resizable()
@@ -671,66 +864,28 @@ struct GalleryImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: (isContentLocked ? -14 : -60) - max(0, -swipeUpDragOffset) * 0.25)
+        .offset(y: isContentLocked ? -14 : -60)
     }
 
-    // 底部「上滑进入手动调整」的提示胶囊。跟手拖动时会渐显并轻微跟随手指上浮，
-    // 触发后随 sheet 弹起的 spring 动画自然回落。
-    @ViewBuilder
-    private var swipeUpHintBar: some View {
-        let progress = min(1, max(0, -swipeUpDragOffset / swipeUpTriggerThreshold))
-        let isArmed = progress >= 1
-        HStack(spacing: 6) {
-            Image(systemName: isArmed ? "slider.horizontal.3" : "chevron.up")
-                .font(.system(size: 11, weight: .semibold))
-            Text(isArmed ? "松手进入手动调整" : "上滑进入手动调整")
-                .font(.system(size: 11, weight: .medium))
-                .monospacedDigit()
-        }
-        .foregroundStyle(.secondary)
-        .opacity(0.55 + 0.35 * progress)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(
-            Capsule()
-                .fill(Color.primary.opacity(0.04 + 0.05 * progress))
-        )
-        .scaleEffect(1 + 0.04 * progress)
-        .animation(.easeOut(duration: 0.18), value: isArmed)
-        .accessibilityHint("从底部向上滑动，或点上方按钮，进入手动调整页面")
-    }
-
-    // 主预览底部的上滑手势：只在向上拖动时收集累计位移，松手到达阈值则打开调整面板。
+    // 主预览底部的上滑手势：只在向上拖动时收集累计位移，松手到达阈值则进入编辑模式。
     // 用 simultaneousGesture 接入，确保不会抢掉 sheet 自带的下滑关闭手势。
+    // 不再驱动任何可见动画（提示胶囊取消），该手势只是「隐形」加速器。
     private var swipeUpGesture: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
-                // 只跟踪向上方向，向下交还给系统的 sheet dismiss 手势。
                 guard dy <= 0 else {
-                    if swipeUpDragOffset != 0 {
-                        withAnimation(.interactiveSpring()) {
-                            swipeUpDragOffset = 0
-                        }
-                    }
+                    swipeUpDragOffset = 0
                     return
                 }
-                // 引入 rubber-band：超过阈值后位移衰减，让 hint 有“顶到头”的反馈。
-                let raw = dy
-                let damped = raw < -swipeUpTriggerThreshold
-                    ? -swipeUpTriggerThreshold + (raw + swipeUpTriggerThreshold) * 0.35
-                    : raw
-                swipeUpDragOffset = damped
+                swipeUpDragOffset = dy
             }
             .onEnded { value in
                 let shouldTrigger = -swipeUpDragOffset >= swipeUpTriggerThreshold
                     || value.predictedEndTranslation.height <= -swipeUpTriggerThreshold * 1.2
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    swipeUpDragOffset = 0
-                }
-                if shouldTrigger, !isTransferInProgress {
-                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                    openManualAdjustment()
+                swipeUpDragOffset = 0
+                if shouldTrigger, !isTransferInProgress, !isEditing {
+                    enterEditMode()
                 }
             }
     }
@@ -763,6 +918,62 @@ struct GalleryImageViewer: View {
             )
         }
     }
+
+    // 编辑模式下的预览：几何与 AdjustedPhotoPreview 同源，但读取 draftAdjustment
+    // 并接 pinch / rotate / drag 三者合手势。
+    @ViewBuilder
+    private func editableScreen(for photo: GalleryPhoto) -> some View {
+        GeometryReader { proxy in
+            let baseScale = max(proxy.size.width / photo.image.size.width, proxy.size.height / photo.image.size.height)
+            let offsetScale = min(proxy.size.width / renderTargetSize.width, proxy.size.height / renderTargetSize.height)
+
+            Image(uiImage: photo.image)
+                .resizable()
+                .interpolation(.medium)
+                .frame(width: photo.image.size.width * baseScale, height: photo.image.size.height * baseScale)
+                .scaleEffect(draftAdjustment.scale)
+                .rotationEffect(.radians(Double(draftAdjustment.rotation)))
+                .offset(x: draftAdjustment.offsetX * offsetScale, y: draftAdjustment.offsetY * offsetScale)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .background(Color.white)
+        .clipped()
+        .contentShape(Rectangle())
+        .gesture(editableCombinedGesture)
+    }
+
+    private var editableCombinedGesture: some Gesture {
+        let drag = DragGesture()
+            .onChanged { value in
+                draftAdjustment.offsetX = clampOffset(gestureOffsetStart.width + value.translation.width)
+                draftAdjustment.offsetY = clampOffset(gestureOffsetStart.height + value.translation.height)
+            }
+            .onEnded { _ in
+                gestureOffsetStart = CGSize(width: draftAdjustment.offsetX, height: draftAdjustment.offsetY)
+            }
+
+        let magnify = MagnificationGesture()
+            .onChanged { value in
+                draftAdjustment.scale = clampScale(gestureScaleStart * value)
+            }
+            .onEnded { _ in
+                gestureScaleStart = draftAdjustment.scale
+            }
+
+        let rotate = RotationGesture()
+            .onChanged { angle in
+                draftAdjustment.rotation = clampRotation(gestureRotationStart + CGFloat(angle.radians))
+            }
+            .onEnded { _ in
+                gestureRotationStart = draftAdjustment.rotation
+            }
+
+        return SimultaneousGesture(SimultaneousGesture(magnify, rotate), drag)
+    }
+
+    private func clampScale(_ value: CGFloat) -> CGFloat { min(max(value, 0.25), 3) }
+    private func clampOffset(_ value: CGFloat) -> CGFloat { min(max(value, -160), 160) }
+    private func clampRotation(_ value: CGFloat) -> CGFloat { min(max(value, -.pi), .pi) }
 
     // 加载某张照片对应的“手动调整”状态；缺省值代表没有自定义。
     private func savedAdjustment(for photo: GalleryPhoto) -> EInkManualAdjustment {
@@ -869,11 +1080,6 @@ private struct LockedPhotoPreview: View {
         .frame(width: screenSize.width, height: screenSize.height)
         .clipped()
     }
-}
-
-private struct GalleryTransferRequest: Identifiable {
-    let id = UUID()
-    let photo: GalleryPhoto
 }
 
 private struct GalleryView_Previews: PreviewProvider {
