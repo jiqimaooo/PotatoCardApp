@@ -797,7 +797,18 @@ struct GalleryImageViewer: View {
         let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
         let transferImage = transferImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
         let displayImage = displayImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
-        pendingTransferData = imageData
+        // 给主界面 / 上次传输缓存的 imageData：
+        //   - 默认值（无任何调整）→ 维持原始 imageData，质量更高
+        //   - 用户调整过 → 用渲染后的 displayImage 的 JPEG，主界面看到的与设备一致
+        // 之前一律传原始 imageData，主界面看到的永远是「未编辑版本」，被用户误以为
+        // 是「传输到设备的也是原图」。
+        let recordedData: Data
+        if adjustment == .default {
+            recordedData = imageData
+        } else {
+            recordedData = displayImage.jpegData(compressionQuality: 0.9) ?? imageData
+        }
+        pendingTransferData = recordedData
         pendingTransferImage = displayImage
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
