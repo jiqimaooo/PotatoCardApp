@@ -386,6 +386,10 @@ struct GalleryImageViewer: View {
     // 也不再需要自定义上滑手势——原生 sheet detent 拖动就是调整入口。
     @State private var selectedDetent: PresentationDetent = .height(560)
     @State private var draftAdjustment = EInkManualAdjustment.default
+    // 进入编辑模式时快照当前图的「已保存调整」，
+    // 用户点「取消」时把 draft 还原为快照、再收起 sheet，
+    // 于是 persistDraftIfNeeded 写回的与原状态一致，二进制到量上就是「未修改」。
+    @State private var preEditSnapshot: EInkManualAdjustment = .default
     @State private var gestureScaleStart: CGFloat = 1
     @State private var gestureRotationStart: CGFloat = 0
     @State private var gestureOffsetStart: CGSize = .zero
@@ -474,6 +478,16 @@ struct GalleryImageViewer: View {
             }
             .toolbar {
                 if !isContentLocked {
+                    ToolbarItem(placement: .topBarLeading) {
+                        if isExpanded {
+                            // 编辑模式专用「取消」：只撤销本次调整，
+                            // 已保存过的调整仍保留不变。
+                            Button("取消") {
+                                cancelEditMode()
+                            }
+                        }
+                    }
+
                     ToolbarItem(placement: .principal) {
                         Text(toolbarTitle)
                             .font(.headline)
@@ -659,8 +673,11 @@ struct GalleryImageViewer: View {
     private func expandToEdit() {
         guard !isTransferInProgress else { return }
         // 进入 .large 之前先把 draft 重新对齐到当前图的已保存值，
-        // 避免上一张图的 draft 被带到这一张。
-        draftAdjustment = savedAdjustment(for: photos[selectedIndex])
+        // 避免上一张图的 draft 被带到这一张；同时把这一刻的状态作为
+        // 「取消」需要回滚到的快照。
+        let saved = savedAdjustment(for: photos[selectedIndex])
+        draftAdjustment = saved
+        preEditSnapshot = saved
         resetGestureBaselines()
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
             selectedDetent = .large
@@ -675,6 +692,14 @@ struct GalleryImageViewer: View {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
             selectedDetent = .height(560)
         }
+    }
+
+    private func cancelEditMode() {
+        // 把 draft 回退到进入编辑前的快照，再走正常 collapse 路径；
+        // 由于 persistDraftIfNeeded 写回的就是快照值，相当于本次会话从未发生。
+        draftAdjustment = preEditSnapshot
+        resetGestureBaselines()
+        collapseToPreview()
     }
 
     private func persistDraftIfNeeded() {

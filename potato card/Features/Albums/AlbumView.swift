@@ -152,6 +152,7 @@ private struct AlbumImageViewer: View {
     // .large = 全屏编辑，.height(560) = 预览。
     @State private var selectedDetent: PresentationDetent = .height(560)
     @State private var draftAdjustment = EInkManualAdjustment.default
+    @State private var preEditSnapshot: EInkManualAdjustment = .default
     @State private var gestureScaleStart: CGFloat = 1
     @State private var gestureRotationStart: CGFloat = 0
     @State private var gestureOffsetStart: CGSize = .zero
@@ -203,8 +204,16 @@ private struct AlbumImageViewer: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") {
-                        dismiss()
+                    if isExpanded {
+                        // 编辑模式专用「取消」：只撤销本次会话的调整，
+                        // 不会关闭整个 viewer。
+                        Button("取消") {
+                            cancelEditMode()
+                        }
+                    } else {
+                        Button("关闭") {
+                            dismiss()
+                        }
                     }
                 }
 
@@ -397,7 +406,9 @@ private struct AlbumImageViewer: View {
 
     private func enterEditMode() {
         guard !isTransferInProgress else { return }
-        draftAdjustment = savedAdjustmentForCurrentAlbum()
+        let saved = savedAdjustmentForCurrentAlbum()
+        draftAdjustment = saved
+        preEditSnapshot = saved
         resetGestureBaselines()
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
@@ -413,6 +424,14 @@ private struct AlbumImageViewer: View {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
             selectedDetent = .height(560)
         }
+    }
+
+    private func cancelEditMode() {
+        // 回滚到进入编辑前快照，再走 collapse 的 persist 路径写回快照值，
+        // 与 storage 保持原状。
+        draftAdjustment = preEditSnapshot
+        resetGestureBaselines()
+        collapseToPreview()
     }
 
     private func persistDraftIfNeeded() {
