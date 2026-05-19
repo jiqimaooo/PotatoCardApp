@@ -188,6 +188,8 @@ private struct AlbumImageViewer: View {
                 if !expanded {
                     persistDraftIfNeeded()
                 } else {
+                    // 拉起即视为进入新的「编辑会话」：捕获快照，无论是按钮触发还是拖动触发。
+                    preEditSnapshot = savedAdjustmentForCurrentAlbum()
                     resetGestureBaselines()
                     UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }

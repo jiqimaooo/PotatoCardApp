@@ -458,7 +458,11 @@ struct GalleryImageViewer: View {
                 if !expanded {
                     persistDraftIfNeeded()
                 } else {
-                    // 拉起时重置手势基线，避免在 .height(560) 时的累计偏移影响第一次拖动。
+                    // 拉起即视为进入了一次新的「编辑会话」：把当前 saved 值作为
+                    // 「取消」要回退到的快照。不管是点按钮还是直接拖动 sheet 上来都会走这里。
+                    if photos.indices.contains(selectedIndex) {
+                        preEditSnapshot = savedAdjustment(for: photos[selectedIndex])
+                    }
                     resetGestureBaselines()
                     UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }

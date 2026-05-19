@@ -20,7 +20,10 @@ struct CirclePostComposerView: View {
     private let initialImageData: Data?
     // 允许用户换图。图库分享路径下传入 false，避免把外部裁好的图片改掉。
     private let allowsPhotoChange: Bool
-    private let photoPreviewAspectRatio: CGFloat = 0.82
+    // 预制图是 400×600（2:3），使用原有 4:5 占位会让 scaledToFill 再裁
+    // 一次，用户看到的就是「原始图」而不是手动调整后的预览。
+    // 有预制图时切成 2/3，预览区 = 上传区 = 墨水屏区。
+    private var photoPreviewAspectRatio: CGFloat { initialImageData != nil ? 2.0 / 3.0 : 0.82 }
     private let postUploadCompressionQuality: CGFloat = 0.82
 
     private enum Field: Hashable {
@@ -422,7 +425,8 @@ struct CircleDriftBottleThrowComposerView: View {
     private let initialImageData: Data?
     private let allowsPhotoChange: Bool
 
-    private let photoPreviewAspectRatio: CGFloat = 0.82
+    // 预制图是 400×600（2:3）；有预制图时切成 2/3预览区 = 上传区。
+    private var photoPreviewAspectRatio: CGFloat { initialImageData != nil ? 2.0 / 3.0 : 0.82 }
     private let uploadCompressionQuality: CGFloat = 0.82
 
     init(
