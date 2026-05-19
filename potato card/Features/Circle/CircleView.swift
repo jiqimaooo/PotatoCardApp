@@ -946,22 +946,27 @@ private struct CircleImageTokenTransferView: View {
     @State private var isLoadingReceived = false
     @State private var isPreparingTokenTransfer = false
     @State private var pendingTransferToken: CircleImageToken?
+    @State private var transientReceivedTokenIDs: Set<String> = []
+    @State private var receivedTokenDismissalIDs: [String: UUID] = [:]
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                modePicker
+        GeometryReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    modePicker
 
-                if mode == .send {
-                    sendSection
-                } else {
-                    receiveSection
+                    if mode == .send {
+                        sendSection
+                    } else {
+                        receiveSection
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
+                .frame(width: proxy.size.width, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
         }
         .background(Color(.systemGroupedBackground))
         .task {
@@ -998,39 +1003,7 @@ private struct CircleImageTokenTransferView: View {
 
     private var sendSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(.secondarySystemGroupedBackground))
-                        .frame(height: 210)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(cardStrokeColor, lineWidth: 1)
-                        }
-
-                    if let selectedImage {
-                        Image(uiImage: selectedImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 210)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    } else {
-                        VStack(spacing: 10) {
-                            Image(systemName: "photo.badge.plus")
-                                .font(.system(size: 30, weight: .semibold))
-                                .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
-                            Text("选择要生成口令的图片")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.primary)
-                            Text("发送方可预览，接收方不可在手机查看")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .buttonStyle(.plain)
+            imageTokenPhotoPicker
 
             VStack(spacing: 0) {
                 settingsRow(icon: "textformat.123", title: "口令") {
@@ -1089,6 +1062,53 @@ private struct CircleImageTokenTransferView: View {
         }
     }
 
+    private var imageTokenPhotoPicker: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+
+            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+
+                    if let selectedImage {
+                        Image(uiImage: selectedImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: width, height: 210)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 30, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+                            Text("选择要生成口令的图片")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("发送方可预览，接收方不可在手机查看")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: width, height: 210)
+                    }
+                }
+                .frame(width: width, height: 210)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(cardStrokeColor, lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .frame(width: width, height: 210)
+            .clipped()
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 210)
+    }
+
     private var receiveSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(spacing: 0) {
@@ -1131,15 +1151,21 @@ private struct CircleImageTokenTransferView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
-            } else if receivedTokens.isEmpty {
+            } else if visibleReceivedTokens.isEmpty {
                 emptyLockedState
             } else {
                 VStack(spacing: 12) {
-                    ForEach(receivedTokens) { token in
+                    ForEach(visibleReceivedTokens) { token in
                         lockedTokenCard(token)
                     }
                 }
             }
+        }
+    }
+
+    private var visibleReceivedTokens: [CircleImageToken] {
+        receivedTokens.filter { token in
+            token.status == .claimed || transientReceivedTokenIDs.contains(token.id)
         }
     }
 
@@ -1292,6 +1318,7 @@ private struct CircleImageTokenTransferView: View {
                 await MainActor.run {
                     selectedImage = image
                     selectedImageData = jpegData
+                    selectedPhotoItem = nil
                     createdToken = nil
                 }
             } catch {
@@ -1444,6 +1471,32 @@ private struct CircleImageTokenTransferView: View {
             receivedTokens[index] = token
         } else {
             receivedTokens.insert(token, at: 0)
+        }
+
+        if token.status == .transferred || token.status == .destroyed {
+            scheduleReceivedTokenDismissal(token.id)
+        }
+    }
+
+    private func scheduleReceivedTokenDismissal(_ tokenID: String) {
+        let dismissalID = UUID()
+        transientReceivedTokenIDs.insert(tokenID)
+        receivedTokenDismissalIDs[tokenID] = dismissalID
+
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await MainActor.run {
+                guard receivedTokenDismissalIDs[tokenID] == dismissalID else { return }
+                receivedTokenDismissalIDs[tokenID] = nil
+
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    transientReceivedTokenIDs.remove(tokenID)
+                    if let index = receivedTokens.firstIndex(where: { $0.id == tokenID }),
+                       receivedTokens[index].status != .claimed {
+                        receivedTokens.remove(at: index)
+                    }
+                }
+            }
         }
     }
 }
