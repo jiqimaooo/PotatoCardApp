@@ -175,6 +175,10 @@ private struct AlbumImageViewer: View {
                 bottomScrollSection
             }
             .background((colorScheme == .dark ? Color.black : Color.white).ignoresSafeArea())
+            // 跟 GalleryImageViewer 一致：让 navigation bar 背景跟内容同色，
+            // 避免 .height(560) 时系统材质给标题区染出一条比背景更浅的白条。
+            .toolbarBackground(colorScheme == .dark ? Color.black : Color.white, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .onChange(of: selectedIndex) { _ in
                 draftAdjustment = savedAdjustmentForCurrentAlbum()
                 resetGestureBaselines()
