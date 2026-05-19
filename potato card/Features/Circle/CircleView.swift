@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -36,6 +37,7 @@ struct CircleView: View {
         case following
         case latest
         case driftBottle
+        case imageToken
 
         var title: String {
             switch self {
@@ -47,6 +49,8 @@ struct CircleView: View {
                 return "最新"
             case .driftBottle:
                 return "漂流瓶"
+            case .imageToken:
+                return "口令传图"
             }
         }
 
@@ -193,9 +197,16 @@ struct CircleView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            ForEach(FeedSection.allCases, id: \.self) { section in
-                feedTab(section)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(FeedSection.allCases, id: \.self) { section in
+                        feedTab(section)
+                    }
+                }
+                .padding(.trailing, 2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             Spacer()
             betaBadge
         }
@@ -307,6 +318,14 @@ struct CircleView: View {
                 onDraw: drawDriftBottle,
                 onScrollOffsetChange: handleFeedScrollOffset
             )
+        case .imageToken:
+            CircleImageTokenTransferView(
+                apiClient: sessionAPIClient,
+                accessToken: sessionStore.token,
+                onSessionError: handleSessionError,
+                onToast: showToast
+            )
+            .environmentObject(bleService)
         }
     }
 
@@ -897,6 +916,553 @@ private struct CircleImageViewerRequest: Identifiable {
     let post: CirclePost
     let photo: GalleryPhoto
     let lockedPreviewText: String
+}
+
+private struct CircleImageTokenTransferView: View {
+    enum Mode: String, CaseIterable {
+        case send = "发送"
+        case receive = "接收"
+    }
+
+    let apiClient: CircleAPIClient
+    let accessToken: String?
+    let onSessionError: (Error) -> Void
+    let onToast: (String, CircleToastMessage.Style) -> Void
+
+    @EnvironmentObject private var bleService: BleTransferService
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var mode: Mode = .send
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedImage: UIImage?
+    @State private var selectedImageData: Data?
+    @State private var customTokenCode = ""
+    @State private var isBurnAfterRead = true
+    @State private var expiresInHours = 24
+    @State private var createdToken: CircleImageToken?
+    @State private var claimCode = ""
+    @State private var receivedTokens: [CircleImageToken] = []
+    @State private var isCreating = false
+    @State private var isClaiming = false
+    @State private var isLoadingReceived = false
+    @State private var isPreparingTokenTransfer = false
+    @State private var pendingTransferToken: CircleImageToken?
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                modePicker
+
+                if mode == .send {
+                    sendSection
+                } else {
+                    receiveSection
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
+        }
+        .background(Color(.systemGroupedBackground))
+        .task {
+            await loadReceivedTokens()
+        }
+        .onChange(of: selectedPhotoItem) { item in
+            loadSelectedPhoto(item)
+        }
+        .onChange(of: bleService.transferPhase) { phase in
+            handleTransferPhaseChange(phase)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("口令传图")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.primary)
+            Text("领取后不能在手机查看，只能传输到土豆片设备。")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var modePicker: some View {
+        Picker("口令传图模式", selection: $mode) {
+            ForEach(Mode.allCases, id: \.self) { mode in
+                Text(mode.rawValue).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private var sendSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                        .frame(height: 210)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(cardStrokeColor, lineWidth: 1)
+                        }
+
+                    if let selectedImage {
+                        Image(uiImage: selectedImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 210)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 30, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+                            Text("选择要生成口令的图片")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("发送方可预览，接收方不可在手机查看")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+
+            VStack(spacing: 0) {
+                settingsRow(icon: "textformat.123", title: "口令") {
+                    TextField("留空自动生成", text: $customTokenCode)
+                        .font(.system(size: 15, weight: .semibold))
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                }
+
+                Divider().padding(.leading, 44)
+
+                settingsRow(icon: "flame", title: "阅后即焚") {
+                    Toggle("", isOn: $isBurnAfterRead)
+                        .labelsHidden()
+                        .tint(Color(red: 0.86, green: 0.16, blue: 0.22))
+                }
+
+                Divider().padding(.leading, 44)
+
+                settingsRow(icon: "clock", title: "有效期") {
+                    Stepper("\(expiresInHours) 小时", value: $expiresInHours, in: 1...168, step: 1)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(cardStrokeColor, lineWidth: 1)
+            }
+
+            Button {
+                createToken()
+            } label: {
+                HStack(spacing: 8) {
+                    if isCreating {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "key.fill")
+                    }
+                    Text(isCreating ? "正在生成" : "生成口令")
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(createButtonEnabled ? Color(red: 0.86, green: 0.16, blue: 0.22) : Color(.systemGray3), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!createButtonEnabled)
+
+            if let createdToken {
+                createdTokenCard(createdToken)
+            }
+        }
+    }
+
+    private var receiveSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(spacing: 0) {
+                settingsRow(icon: "keyboard", title: "输入口令") {
+                    TextField("例如 POTATO24", text: $claimCode)
+                        .font(.system(size: 15, weight: .semibold))
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(cardStrokeColor, lineWidth: 1)
+            }
+
+            Button {
+                claimToken()
+            } label: {
+                HStack(spacing: 8) {
+                    if isClaiming {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "tray.and.arrow.down.fill")
+                    }
+                    Text(isClaiming ? "正在领取" : "领取图片")
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(claimButtonEnabled ? Color(red: 0.86, green: 0.16, blue: 0.22) : Color(.systemGray3), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!claimButtonEnabled)
+
+            if isLoadingReceived {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+            } else if receivedTokens.isEmpty {
+                emptyLockedState
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(receivedTokens) { token in
+                        lockedTokenCard(token)
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyLockedState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "lock.rectangle.stack")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+            Text("还没有领取图片")
+                .font(.system(size: 17, weight: .bold))
+            Text("输入口令后，图片会以锁定状态进入待传输列表。")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        }
+    }
+
+    private func createdTokenCard(_ token: CircleImageToken) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("口令已生成")
+                .font(.system(size: 15, weight: .bold))
+            HStack(spacing: 10) {
+                Text(token.tokenCode)
+                    .font(.system(size: 28, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer()
+                Button {
+                    UIPasteboard.general.string = token.tokenCode
+                    onToast("口令已复制", .success)
+                } label: {
+                    Label("复制", systemImage: "doc.on.doc")
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .buttonStyle(.plain)
+            }
+            Text("发送给对方后，对方领取成功即失效。")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        }
+    }
+
+    private func lockedTokenCard(_ token: CircleImageToken) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(red: 0.86, green: 0.16, blue: 0.22).opacity(0.12))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: token.status == .destroyed ? "checkmark.seal.fill" : "lock.display")
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(token.status == .destroyed ? "图片已传输并销毁" : "图片已接收")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.primary)
+                    Text(token.status == .claimed ? "请传输到土豆片后查看" : token.statusText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            if token.status == .claimed {
+                Button {
+                    beginTransfer(token)
+                } label: {
+                    HStack(spacing: 8) {
+                        if isPreparingTokenTransfer && pendingTransferToken?.id == token.id {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                        }
+                        Text(isPreparingTokenTransfer && pendingTransferToken?.id == token.id ? "正在准备传输" : "传输到土豆片")
+                    }
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(Color(red: 0.86, green: 0.16, blue: 0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isPreparingTokenTransfer)
+            }
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        }
+    }
+
+    private func settingsRow<Content: View>(icon: String, title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color(red: 0.86, green: 0.16, blue: 0.22))
+                .frame(width: 32, height: 32)
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 10)
+            content()
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 54)
+    }
+
+    private var cardStrokeColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.07)
+    }
+
+    private var createButtonEnabled: Bool {
+        selectedImageData != nil && !isCreating
+    }
+
+    private var claimButtonEnabled: Bool {
+        !claimCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isClaiming
+    }
+
+    private func loadSelectedPhoto(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        Task {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data),
+                      let jpegData = image.jpegData(compressionQuality: 0.86) else {
+                    onToast("图片读取失败", .error)
+                    return
+                }
+                await MainActor.run {
+                    selectedImage = image
+                    selectedImageData = jpegData
+                    createdToken = nil
+                }
+            } catch {
+                await MainActor.run {
+                    onToast(error.localizedDescription, .error)
+                }
+            }
+        }
+    }
+
+    private func createToken() {
+        guard let selectedImageData else { return }
+        isCreating = true
+        Task {
+            do {
+                let token = try await apiClient.createImageToken(
+                    imageData: selectedImageData,
+                    tokenCode: customTokenCode,
+                    isBurnAfterRead: isBurnAfterRead,
+                    expiresInHours: expiresInHours,
+                    accessToken: accessToken
+                )
+                await MainActor.run {
+                    createdToken = token
+                    customTokenCode = ""
+                    onToast("口令已生成", .success)
+                }
+            } catch {
+                await MainActor.run {
+                    onSessionError(error)
+                }
+            }
+            await MainActor.run {
+                isCreating = false
+            }
+        }
+    }
+
+    private func claimToken() {
+        let code = claimCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        isClaiming = true
+        Task {
+            do {
+                let token = try await apiClient.claimImageToken(tokenCode: code, accessToken: accessToken)
+                await MainActor.run {
+                    upsertReceivedToken(token)
+                    claimCode = ""
+                    onToast("图片已接收，请传输到土豆片后查看", .success)
+                }
+            } catch {
+                await MainActor.run {
+                    onSessionError(error)
+                }
+            }
+            await MainActor.run {
+                isClaiming = false
+            }
+        }
+    }
+
+    private func loadReceivedTokens() async {
+        isLoadingReceived = true
+        defer { isLoadingReceived = false }
+        do {
+            receivedTokens = try await apiClient.fetchReceivedImageTokens(accessToken: accessToken)
+        } catch {
+            onSessionError(error)
+        }
+    }
+
+    private func beginTransfer(_ token: CircleImageToken) {
+        guard !isPreparingTokenTransfer else { return }
+        guard bleService.transferPhase != .preparing && bleService.transferPhase != .transferring else {
+            onToast(BleTransferError.transferBusy.localizedDescription, .error)
+            return
+        }
+        guard let device = bleService.connectedDevice ?? bleService.selectedDevice else {
+            onToast("请先连接土豆片设备", .error)
+            return
+        }
+
+        pendingTransferToken = token
+        isPreparingTokenTransfer = true
+        Task {
+            do {
+                let image = try await apiClient.downloadImageTokenTransferImage(id: token.id, accessToken: accessToken)
+                let displayImage = EInkImageRenderer.render(
+                    image: image,
+                    targetSize: device.profile.pixelSize,
+                    fitMode: .centerCrop,
+                    adjustment: .default
+                )
+                let transferImage = EInkImageRenderer.renderForTransfer(
+                    image: image,
+                    targetSize: device.profile.pixelSize,
+                    fitMode: .centerCrop,
+                    adjustment: .default,
+                    profile: device.profile,
+                    ditherAlgorithm: bleService.ditherAlgorithm
+                )
+                await MainActor.run {
+                    bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
+                }
+            } catch {
+                await MainActor.run {
+                    pendingTransferToken = nil
+                    onSessionError(error)
+                }
+            }
+            await MainActor.run {
+                isPreparingTokenTransfer = false
+            }
+        }
+    }
+
+    private func handleTransferPhaseChange(_ phase: TransferPhase) {
+        switch phase {
+        case .succeeded:
+            guard let pendingTransferToken else { return }
+            let deviceID = bleService.connectedDevice?.id ?? bleService.selectedDevice?.id
+            Task {
+                do {
+                    let updated = try await apiClient.recordImageTokenTransfer(
+                        id: pendingTransferToken.id,
+                        deviceID: deviceID,
+                        accessToken: accessToken
+                    )
+                    await MainActor.run {
+                        upsertReceivedToken(updated)
+                        self.pendingTransferToken = nil
+                        onToast(updated.isBurnAfterRead ? "图片已传输并销毁" : "图片已传输", .success)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.pendingTransferToken = nil
+                        onSessionError(error)
+                    }
+                }
+            }
+        case .failed:
+            pendingTransferToken = nil
+        case .idle, .preparing, .transferring:
+            break
+        }
+    }
+
+    private func upsertReceivedToken(_ token: CircleImageToken) {
+        if let index = receivedTokens.firstIndex(where: { $0.id == token.id }) {
+            receivedTokens[index] = token
+        } else {
+            receivedTokens.insert(token, at: 0)
+        }
+    }
+}
+
+private extension CircleImageToken {
+    var statusText: String {
+        switch status {
+        case .active:
+            return "未领取"
+        case .claimed:
+            return "请传输到土豆片后查看"
+        case .expired:
+            return "该口令已过期"
+        case .transferred:
+            return "图片已传输，服务端图片已销毁"
+        case .destroyed:
+            return "图片已传输并销毁"
+        }
+    }
 }
 
 private struct CircleBetaNoticeSheet: View {

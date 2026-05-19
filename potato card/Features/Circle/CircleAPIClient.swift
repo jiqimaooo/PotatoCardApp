@@ -6,6 +6,7 @@ enum CircleAPIError: LocalizedError {
     case httpStatus(Int)
     case missingAuthToken
     case unauthorized
+    case serverMessage(String)
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ enum CircleAPIError: LocalizedError {
             return "登录状态已失效，请重新登录"
         case .unauthorized:
             return "登录状态已失效，请重新登录"
+        case .serverMessage(let message):
+            return message
         }
     }
 }
@@ -146,6 +149,62 @@ struct CircleAPIClient {
         return try decoder.decode(CircleDriftBottleDrawResponse.self, from: data)
     }
 
+    func createImageToken(
+        imageData: Data,
+        tokenCode: String?,
+        isBurnAfterRead: Bool,
+        expiresInHours: Int,
+        accessToken: String? = nil
+    ) async throws -> CircleImageToken {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = imageTokenMultipartBody(
+            boundary: boundary,
+            imageData: imageData,
+            tokenCode: tokenCode,
+            isBurnAfterRead: isBurnAfterRead,
+            expiresInHours: expiresInHours
+        )
+        let data = try await perform(request)
+        return try imageTokenDecoder.decode(CircleImageToken.self, from: data)
+    }
+
+    func claimImageToken(tokenCode: String, accessToken: String? = nil) async throws -> CircleImageToken {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/claim"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        request.setJSONBody(["tokenCode": tokenCode])
+        let data = try await perform(request)
+        return try imageTokenDecoder.decode(CircleImageToken.self, from: data)
+    }
+
+    func fetchReceivedImageTokens(accessToken: String? = nil) async throws -> [CircleImageToken] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/received"))
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        let data = try await perform(request)
+        return try imageTokenDecoder.decode(CircleImageTokenListResponse.self, from: data).items
+    }
+
+    func downloadImageTokenTransferImage(id: String, accessToken: String? = nil) async throws -> UIImage {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/\(id)/transfer-image"))
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        let data = try await perform(request)
+        guard let image = UIImage(data: data) else { throw CircleAPIError.invalidResponse }
+        return image
+    }
+
+    func recordImageTokenTransfer(id: String, deviceID: String?, accessToken: String? = nil) async throws -> CircleImageToken {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/\(id)/transfer-events"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        request.setJSONBody(ImageTokenTransferEventBody(deviceId: deviceID))
+        let data = try await perform(request)
+        return try imageTokenDecoder.decode(CircleImageToken.self, from: data)
+    }
+
     func downloadTransferImage(from url: URL) async throws -> UIImage {
         let (data, response) = try await urlSession.data(from: url)
         guard let http = response as? HTTPURLResponse else { throw CircleAPIError.invalidResponse }
@@ -175,8 +234,29 @@ struct CircleAPIClient {
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw CircleAPIError.invalidResponse }
         if http.statusCode == 401 { throw CircleAPIError.unauthorized }
-        guard (200..<300).contains(http.statusCode) else { throw CircleAPIError.httpStatus(http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else {
+            if let message = serverErrorMessage(from: data) {
+                throw CircleAPIError.serverMessage(message)
+            }
+            throw CircleAPIError.httpStatus(http.statusCode)
+        }
         return data
+    }
+
+    private func serverErrorMessage(from data: Data) -> String? {
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let rawMessage = object["message"]
+        else {
+            return nil
+        }
+        if let message = rawMessage as? String, !message.isEmpty {
+            return message
+        }
+        if let messages = rawMessage as? [String], let message = messages.first, !message.isEmpty {
+            return message
+        }
+        return nil
     }
 
     private func multipartBody(boundary: String, imageData: Data, title: String, tags: [String]) -> Data {
@@ -211,10 +291,37 @@ struct CircleAPIClient {
         return data
     }
 
+    private func imageTokenMultipartBody(
+        boundary: String,
+        imageData: Data,
+        tokenCode: String?,
+        isBurnAfterRead: Bool,
+        expiresInHours: Int
+    ) -> Data {
+        var data = Data()
+        if let tokenCode, !tokenCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appendField("tokenCode", tokenCode, boundary: boundary, to: &data)
+        }
+        appendField("isBurnAfterRead", isBurnAfterRead ? "true" : "false", boundary: boundary, to: &data)
+        appendField("expiresInHours", "\(expiresInHours)", boundary: boundary, to: &data)
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"image-token.jpg\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        data.append(imageData)
+        data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        return data
+    }
+
     private func appendField(_ name: String, _ value: String, boundary: String, to data: inout Data) {
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
         data.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
         data.append("\(value)\r\n".data(using: .utf8)!)
+    }
+
+    private var imageTokenDecoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 
     private struct RegisterVerifyBody: Encodable {
@@ -227,6 +334,10 @@ struct CircleAPIClient {
 
     private struct CircleAvatarUploadResponse: Decodable {
         let avatarKey: String
+    }
+
+    private struct ImageTokenTransferEventBody: Encodable {
+        let deviceId: String?
     }
 }
 

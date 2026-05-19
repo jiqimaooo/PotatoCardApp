@@ -95,6 +95,32 @@ struct CircleTransferTicket: Codable {
     let expiresInSeconds: Int
 }
 
+enum CircleImageTokenStatus: String, Codable, Equatable {
+    case active = "ACTIVE"
+    case claimed = "CLAIMED"
+    case expired = "EXPIRED"
+    case transferred = "TRANSFERRED"
+    case destroyed = "DESTROYED"
+}
+
+struct CircleImageToken: Codable, Equatable, Identifiable {
+    let id: String
+    let tokenCode: String
+    let senderUserId: String
+    let receiverUserId: String?
+    let isBurnAfterRead: Bool
+    let status: CircleImageTokenStatus
+    let claimedAt: Date?
+    let transferredAt: Date?
+    let destroyedAt: Date?
+    let expiresAt: Date?
+    let createdAt: Date?
+}
+
+struct CircleImageTokenListResponse: Codable {
+    let items: [CircleImageToken]
+}
+
 struct CircleAuthSession: Codable {
     let accessToken: String
     let refreshToken: String
