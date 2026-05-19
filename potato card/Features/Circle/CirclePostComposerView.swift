@@ -15,12 +15,31 @@ struct CirclePostComposerView: View {
     @FocusState private var focusedField: Field?
 
     let onPublish: (Data, String, [String]) -> Void
-    private let photoPreviewAspectRatio: CGFloat = 0.82
+    // 外部传入的预制图片（图库长按 → 分享到圈子时已经按 400×600 渲染好），
+    // 不为 nil 时直接使用，不再展示 PhotosPicker，也不会再次压缩。
+    private let initialImageData: Data?
+    // 允许用户换图。图库分享路径下传入 false，避免把外部裁好的图片改掉。
+    private let allowsPhotoChange: Bool
+    // 预制图是 400×600（2:3），使用原有 4:5 占位会让 scaledToFill 再裁
+    // 一次，用户看到的就是「原始图」而不是手动调整后的预览。
+    // 有预制图时切成 2/3，预览区 = 上传区 = 墨水屏区。
+    private var photoPreviewAspectRatio: CGFloat { initialImageData != nil ? 2.0 / 3.0 : 0.82 }
     private let postUploadCompressionQuality: CGFloat = 0.82
 
     private enum Field: Hashable {
         case title
         case tags
+    }
+
+    init(
+        initialImageData: Data? = nil,
+        allowsPhotoChange: Bool = true,
+        onPublish: @escaping (Data, String, [String]) -> Void
+    ) {
+        self.initialImageData = initialImageData
+        self.allowsPhotoChange = allowsPhotoChange
+        self.onPublish = onPublish
+        _selectedImageData = State(initialValue: initialImageData)
     }
 
     var body: some View {
@@ -91,14 +110,22 @@ struct CirclePostComposerView: View {
             let height = width / photoPreviewAspectRatio
 
             ZStack(alignment: .bottomLeading) {
-                PhotosPicker(selection: $selectedItem, matching: .images) {
+                if allowsPhotoChange {
+                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                        photoPreviewContent(width: width, height: height)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPublishing)
+                    .accessibilityLabel(selectedItem == nil ? "选择照片" : "重新选择照片")
+                } else {
+                    // 图库长按 → 分享到圈子：图片已经裁好，只需重复预览，不提供重新选图。
                     photoPreviewContent(width: width, height: height)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                .disabled(isPublishing)
-                .accessibilityLabel(selectedItem == nil ? "选择照片" : "重新选择照片")
 
-                originalUploadButton
+                if allowsPhotoChange {
+                    originalUploadButton
+                }
             }
             .frame(width: width, height: height)
         }
@@ -291,12 +318,17 @@ struct CirclePostComposerView: View {
     }
 
     private var isPublishDisabled: Bool {
-        selectedItem == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPublishing
+        // 原级设计是看 selectedItem，但现在可能是外部传入的 initialImageData，
+        // 统一看 selectedImageData 是否存在。
+        selectedImageData == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPublishing
     }
 
     private func loadSelectedImageData() async {
         guard let selectedItem else {
-            selectedImageData = nil
+            // 外部传入的预制图不走这条重置路径，避免刚进页面就被清掉。
+            if initialImageData == nil {
+                selectedImageData = nil
+            }
             imageLoadFailed = false
             return
         }
@@ -336,6 +368,8 @@ struct CirclePostComposerView: View {
     }
 
     private func preparedUploadData(from data: Data) -> Data {
+        // 外部传入的预制图已经是裁好的 400×600，不需要再压缩，避免二次损质。
+        guard initialImageData == nil else { return data }
         guard !shouldUploadOriginal else { return data }
         guard let image = UIImage(data: data),
               let compressedData = image.jpegData(compressionQuality: postUploadCompressionQuality) else {
@@ -388,9 +422,23 @@ struct CircleDriftBottleThrowComposerView: View {
     @State private var isPlaneLaunched = false
 
     let onThrow: (Data) -> Void
+    private let initialImageData: Data?
+    private let allowsPhotoChange: Bool
 
-    private let photoPreviewAspectRatio: CGFloat = 0.82
+    // 预制图是 400×600（2:3）；有预制图时切成 2/3预览区 = 上传区。
+    private var photoPreviewAspectRatio: CGFloat { initialImageData != nil ? 2.0 / 3.0 : 0.82 }
     private let uploadCompressionQuality: CGFloat = 0.82
+
+    init(
+        initialImageData: Data? = nil,
+        allowsPhotoChange: Bool = true,
+        onThrow: @escaping (Data) -> Void
+    ) {
+        self.initialImageData = initialImageData
+        self.allowsPhotoChange = allowsPhotoChange
+        self.onThrow = onThrow
+        _selectedImageData = State(initialValue: initialImageData)
+    }
 
     var body: some View {
         NavigationStack {
@@ -444,11 +492,16 @@ struct CircleDriftBottleThrowComposerView: View {
             let height = width / photoPreviewAspectRatio
 
             ZStack {
-                PhotosPicker(selection: $selectedItem, matching: .images) {
+                if allowsPhotoChange {
+                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                        photoPreviewContent(width: width, height: height)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSending)
+                } else {
                     photoPreviewContent(width: width, height: height)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                .disabled(isSending)
 
                 if isThrowing {
                     thrownPlane
@@ -543,12 +596,14 @@ struct CircleDriftBottleThrowComposerView: View {
     }
 
     private var isSendDisabled: Bool {
-        selectedItem == nil || selectedImageData == nil || isSending
+        selectedImageData == nil || isSending
     }
 
     private func loadSelectedImageData() async {
         guard let selectedItem else {
-            selectedImageData = nil
+            if initialImageData == nil {
+                selectedImageData = nil
+            }
             imageLoadFailed = false
             return
         }
@@ -596,6 +651,8 @@ struct CircleDriftBottleThrowComposerView: View {
     }
 
     private func preparedUploadData(from data: Data) -> Data {
+        // 外部传入的预制图不再压缩，避免二次损质。
+        guard initialImageData == nil else { return data }
         guard let image = UIImage(data: data),
               let compressedData = image.jpegData(compressionQuality: uploadCompressionQuality) else {
             return data

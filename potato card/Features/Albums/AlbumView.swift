@@ -69,8 +69,8 @@ struct AlbumView: View {
                 initialIndex: group.initialIndex,
                 onTransferToDevice: onTransferToDevice
             )
-                .presentationDetents([.height(560)])
-                .presentationDragIndicator(.visible)
+            // detent / dragIndicator 都由 AlbumImageViewer 内部声明，
+            // 编辑模式会在 .height(560) 和 .large 之间切换。
         }
     }
 
@@ -146,9 +146,18 @@ private struct AlbumImageViewer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedIndex: Int
-    @State private var transferRequest: AlbumTransferRequest?
     @State private var pendingTransferAlbum: String?
     @State private var pendingTransferImage: UIImage?
+    // 与 GalleryImageViewer 同款：编辑状态由 sheet 高度驱动。
+    // .large = 全屏编辑，.height(560) = 预览。
+    @State private var selectedDetent: PresentationDetent = .height(560)
+    @State private var draftAdjustment = EInkManualAdjustment.default
+    @State private var preEditSnapshot: EInkManualAdjustment = .default
+    @State private var gestureScaleStart: CGFloat = 1
+    @State private var gestureRotationStart: CGFloat = 0
+    @State private var gestureOffsetStart: CGSize = .zero
+
+    private var isExpanded: Bool { selectedDetent == .large }
 
     init(albums: [String], initialIndex: Int, onTransferToDevice: @escaping (String) -> Void) {
         self.albums = albums
@@ -159,50 +168,31 @@ private struct AlbumImageViewer: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                (colorScheme == .dark ? Color.black : Color.white)
-                    .ignoresSafeArea()
+            VStack(spacing: 0) {
+                topPreviewSection
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 352)
 
-                albumFramedPreview
-
-                VStack {
-                    Spacer()
-
-                    VStack(spacing: 10) {
-                        transferStatusView
-
-                        Button(action: transferSelectedAlbumDirectly) {
-                            transferButtonLabel
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(activeDevice == nil)
-
-                        Button(action: openManualAdjustment) {
-                            Label("手动调整", systemImage: "slider.horizontal.3")
-                                .frame(minWidth: 100)
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.regular)
-                        .tint(.secondary)
-                        .disabled(isTransferInProgress)
-                    }
-                    .padding(.bottom, 10)
-                    .offset(y: 20)
-                }
+                bottomScrollSection
             }
-            .sheet(item: $transferRequest) { request in
-                TransferSheetView(
-                    sourceImage: request.image,
-                    title: request.album,
-                    editStateKey: .album(request.album),
-                    onTransferSucceeded: {
-                        onTransferToDevice(request.album)
-                        dismiss()
-                    }
-                )
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+            .background((colorScheme == .dark ? Color.black : Color.white).ignoresSafeArea())
+            .onChange(of: selectedIndex) { _ in
+                draftAdjustment = savedAdjustmentForCurrentAlbum()
+                resetGestureBaselines()
+            }
+            .onAppear {
+                draftAdjustment = savedAdjustmentForCurrentAlbum()
+                resetGestureBaselines()
+            }
+            .onChange(of: isExpanded) { expanded in
+                if !expanded {
+                    persistDraftIfNeeded()
+                } else {
+                    // 拉起即视为进入新的「编辑会话」：捕获快照，无论是按钮触发还是拖动触发。
+                    preEditSnapshot = savedAdjustmentForCurrentAlbum()
+                    resetGestureBaselines()
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                }
             }
             .onChange(of: bleService.transferPhase) { phase in
                 guard phase == .succeeded, let album = pendingTransferAlbum else { return }
@@ -216,8 +206,16 @@ private struct AlbumImageViewer: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") {
-                        dismiss()
+                    if isExpanded {
+                        // 编辑模式专用「取消」：只撤销本次会话的调整，
+                        // 不会关闭整个 viewer。
+                        Button("取消") {
+                            cancelEditMode()
+                        }
+                    } else {
+                        Button("关闭") {
+                            dismiss()
+                        }
                     }
                 }
 
@@ -225,8 +223,97 @@ private struct AlbumImageViewer: View {
                     Text(albums[selectedIndex])
                         .font(.system(size: 17, weight: .semibold))
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isExpanded {
+                        Button("完成") {
+                            collapseToPreview()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
             }
         }
+        // 传输进行中只保留小尺寸，禁止再次进入编辑——避免与正在传输的图状态不一致。
+        .presentationDetents(
+            isTransferInProgress ? [.height(560)] : [.height(560), .large],
+            selection: $selectedDetent
+        )
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
+    }
+
+    // MARK: - Layout
+
+    private var topPreviewSection: some View {
+        ZStack {
+            albumFramedPreview
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var bottomScrollSection: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 16) {
+                primaryControls
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+
+                if isExpanded {
+                    adjustmentSection
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.bottom, 24)
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: isExpanded)
+    }
+
+    private var primaryControls: some View {
+        VStack(spacing: 10) {
+            transferStatusView
+
+            Button(action: transferSelectedAlbumDirectly) {
+                transferButtonLabel
+            }
+            .buttonStyle(.plain)
+            .disabled(activeDevice == nil)
+
+            Button {
+                if isExpanded {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        draftAdjustment = .default
+                    }
+                    resetGestureBaselines()
+                } else {
+                    expandToEdit()
+                }
+            } label: {
+                Label(isExpanded ? "重置" : "手动调整",
+                      systemImage: isExpanded ? "arrow.counterclockwise" : "slider.horizontal.3")
+                    .frame(minWidth: 100)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
+            .tint(currentAlbumIsCustomized || draftAdjustment != .default ? .yellow : .secondary)
+            .disabled(isTransferInProgress)
+        }
+    }
+
+    private var adjustmentSection: some View {
+        VStack(spacing: 0) {
+            sliderRow(title: "缩放", value: $draftAdjustment.scale, range: 0.25...3, format: scalePercent)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "旋转", value: $draftAdjustment.rotation, range: -.pi...(.pi), format: rotationDegrees)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "水平", value: $draftAdjustment.offsetX, range: -160...160, format: offsetText)
+            Divider().padding(.leading, 72)
+            sliderRow(title: "垂直", value: $draftAdjustment.offsetY, range: -160...160, format: offsetText)
+        }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
     }
 
     @ViewBuilder
@@ -248,39 +335,129 @@ private struct AlbumImageViewer: View {
             return
         }
 
-        let transferImage = defaultTransferImage(from: image, device: device)
-        let displayImage = defaultDisplayImage(from: image, device: device)
+        // 编辑态点了传输：先把 draft 写回 storage 并收起 sheet，
+        // 否则下面读 saved 还是上一次保存的值，传出去就是「原图」。
+        if isExpanded {
+            persistDraftIfNeeded()
+            selectedDetent = .height(560)
+        }
+
+        // 当前选中那张优先用 in-memory draft，避免 onChange 异步还没写回 storage 的瞬间漏掉。
+        let adjustment = draftAdjustment
+        let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
+
+        let transferImage = EInkImageRenderer.renderForTransfer(
+            image: image,
+            targetSize: device.profile.pixelSize,
+            fitMode: fitMode,
+            adjustment: adjustment,
+            profile: device.profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
+        )
+        let displayImage = EInkImageRenderer.render(
+            image: image,
+            targetSize: device.profile.pixelSize,
+            fitMode: fitMode,
+            adjustment: adjustment
+        )
         pendingTransferAlbum = albums[selectedIndex]
         pendingTransferImage = displayImage
         bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
     }
 
-    private func openManualAdjustment() {
-        let album = albums[selectedIndex]
-        guard let image = UIImage(named: album) else { return }
-        pendingTransferAlbum = nil
-        pendingTransferImage = nil
-        transferRequest = AlbumTransferRequest(album: album, image: image)
+    // MARK: - Bottom layout
+
+    private func sliderRow(
+        title: String,
+        value: Binding<CGFloat>,
+        range: ClosedRange<CGFloat>,
+        format: @escaping (CGFloat) -> String
+    ) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                Text(format(value.wrappedValue))
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 56, alignment: .leading)
+
+            Slider(value: value, in: range)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
-    private func defaultTransferImage(from image: UIImage, device: BleDevice) -> UIImage {
-        EInkImageRenderer.renderForTransfer(
-            image: image,
-            targetSize: device.profile.pixelSize,
-            fitMode: .centerCrop,
-            adjustment: .default,
-            profile: device.profile,
-            ditherAlgorithm: bleService.ditherAlgorithm
-        )
+    private func scalePercent(_ value: CGFloat) -> String {
+        "\(Int((value * 100).rounded()))%"
     }
 
-    private func defaultDisplayImage(from image: UIImage, device: BleDevice) -> UIImage {
-        EInkImageRenderer.render(
-            image: image,
-            targetSize: device.profile.pixelSize,
-            fitMode: .centerCrop,
-            adjustment: .default
-        )
+    private func rotationDegrees(_ value: CGFloat) -> String {
+        let degrees = value * 180 / .pi
+        return String(format: "%.0f°", degrees)
+    }
+
+    private func offsetText(_ value: CGFloat) -> String {
+        "\(Int(value.rounded()))"
+    }
+
+    // MARK: - Edit helpers
+
+    private func savedAdjustmentForCurrentAlbum() -> EInkManualAdjustment {
+        TransferEditStateStore.load(for: .album(albums[selectedIndex])) ?? .default
+    }
+
+    private var currentAlbumIsCustomized: Bool {
+        guard albums.indices.contains(selectedIndex) else { return false }
+        let key = TransferEditStateKey.album(albums[selectedIndex])
+        guard let saved = TransferEditStateStore.load(for: key) else { return false }
+        return saved != .default
+    }
+
+    private func enterEditMode() {
+        guard !isTransferInProgress else { return }
+        let saved = savedAdjustmentForCurrentAlbum()
+        draftAdjustment = saved
+        preEditSnapshot = saved
+        resetGestureBaselines()
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .large
+        }
+    }
+
+    private func expandToEdit() { enterEditMode() }
+
+    private func collapseToPreview() {
+        // 同步持久化：避免 onChange 异步 + body 同步重渲染造成的「图片跳一下」。
+        persistDraftIfNeeded()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+            selectedDetent = .height(560)
+        }
+    }
+
+    private func cancelEditMode() {
+        // 回滚到进入编辑前快照，再走 collapse 的 persist 路径写回快照值，
+        // 与 storage 保持原状。
+        draftAdjustment = preEditSnapshot
+        resetGestureBaselines()
+        collapseToPreview()
+    }
+
+    private func persistDraftIfNeeded() {
+        let key = TransferEditStateKey.album(albums[selectedIndex])
+        if draftAdjustment == .default {
+            TransferEditStateStore.delete(for: key)
+        } else {
+            TransferEditStateStore.save(draftAdjustment, for: key)
+        }
+    }
+
+    private func resetGestureBaselines() {
+        gestureScaleStart = draftAdjustment.scale
+        gestureRotationStart = draftAdjustment.rotation
+        gestureOffsetStart = CGSize(width: draftAdjustment.offsetX, height: draftAdjustment.offsetY)
     }
 
     private var activeDevice: BleDevice? {
@@ -325,6 +502,8 @@ private struct AlbumImageViewer: View {
 
     private var albumFramedPreview: some View {
         ZStack {
+            // 始终一棵 TabView，detent 切换时不再 swap view tree，避免
+            // SwiftUI 给 expanded ↔ collapsed 之间做隐式 cross-fade。
             TabView(selection: $selectedIndex) {
                 ForEach(Array(albums.enumerated()), id: \.offset) { index, album in
                     albumScreenImage(album)
@@ -333,11 +512,20 @@ private struct AlbumImageViewer: View {
             }
             .frame(width: 186, height: 280)
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .allowsHitTesting(isExpanded ? false : true)
             .mask(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .frame(width: 186, height: 280)
             )
             .offset(y: -19)
+
+            if isExpanded {
+                Color.clear
+                    .frame(width: 186, height: 280)
+                    .contentShape(Rectangle())
+                    .offset(y: -19)
+                    .gesture(editableCombinedGesture)
+            }
 
             Image("ink_tatoo2")
                 .resizable()
@@ -347,26 +535,86 @@ private struct AlbumImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: -60)
+        // 去掉之前的 .offset(y: -60)：VStack 布局下它会让灯柝顶逿进 nav bar 区域，
+        // 看起来像预览顶多了一条白条。
     }
 
+    // 编辑模式下用到的手势：只更新 draftAdjustment；几何在 albumScreenImage 里
+    // 用 draftAdjustment 直接渲染，所以拖动 / 缩放 / 旋转能实时反映到 TabView 内。
+    private var editableCombinedGesture: some Gesture {
+        let drag = DragGesture()
+            .onChanged { value in
+                draftAdjustment.offsetX = clampOffset(gestureOffsetStart.width + value.translation.width)
+                draftAdjustment.offsetY = clampOffset(gestureOffsetStart.height + value.translation.height)
+            }
+            .onEnded { _ in
+                gestureOffsetStart = CGSize(width: draftAdjustment.offsetX, height: draftAdjustment.offsetY)
+            }
+
+        let magnify = MagnificationGesture()
+            .onChanged { value in
+                draftAdjustment.scale = clampScale(gestureScaleStart * value)
+            }
+            .onEnded { _ in
+                gestureScaleStart = draftAdjustment.scale
+            }
+
+        let rotate = RotationGesture()
+            .onChanged { angle in
+                draftAdjustment.rotation = clampRotation(gestureRotationStart + CGFloat(angle.radians))
+            }
+            .onEnded { _ in
+                gestureRotationStart = draftAdjustment.rotation
+            }
+
+        return SimultaneousGesture(SimultaneousGesture(magnify, rotate), drag)
+    }
+
+    private func clampScale(_ value: CGFloat) -> CGFloat { min(max(value, 0.25), 3) }
+    private func clampOffset(_ value: CGFloat) -> CGFloat { min(max(value, -160), 160) }
+    private func clampRotation(_ value: CGFloat) -> CGFloat { min(max(value, -.pi), .pi) }
+
+    // 「土豆片屏幕」内的非编辑模式预览，应用已保存的调整。
+    // 当前选中那张图直接读 draftAdjustment，避免下拉 detent 时 onChange 异步触
+    // 发 persistDraftIfNeeded、body 已经先渲染一遍读到旧 storage 值造成的「图片
+    // 跳一下回到上次保存位置」。
     private func albumScreenImage(_ album: String) -> some View {
+        let adjustment: EInkManualAdjustment = {
+            if albums.indices.contains(selectedIndex), album == albums[selectedIndex] {
+                return draftAdjustment
+            }
+            return TransferEditStateStore.load(for: .album(album)) ?? .default
+        }()
+        let renderTargetSize = activeDevice?.profile.pixelSize ?? EInkDeviceProfile.fallback.pixelSize
         return GeometryReader { proxy in
-            Image(album)
-                .resizable()
-                .scaledToFill()
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipped()
+            if let image = UIImage(named: album) {
+                if adjustment == .default {
+                    Image(album)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                } else {
+                    let baseScale = max(proxy.size.width / image.size.width, proxy.size.height / image.size.height)
+                    let offsetScale = min(proxy.size.width / renderTargetSize.width, proxy.size.height / renderTargetSize.height)
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(.medium)
+                        .frame(width: image.size.width * baseScale, height: image.size.height * baseScale)
+                        .scaleEffect(adjustment.scale)
+                        .rotationEffect(.radians(Double(adjustment.rotation)))
+                        .offset(x: adjustment.offsetX * offsetScale, y: adjustment.offsetY * offsetScale)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .background(Color.white)
+                        .clipped()
+                }
+            }
         }
         .frame(width: 186, height: 280)
     }
 
-}
+    // 不再需要自定义上滑手势：sheet 原生的 detent 拖动就是「进入全屏编辑」入口。
 
-private struct AlbumTransferRequest: Identifiable {
-    let id = UUID()
-    let album: String
-    let image: UIImage
 }
 
 private struct AlbumView_Previews: PreviewProvider {
