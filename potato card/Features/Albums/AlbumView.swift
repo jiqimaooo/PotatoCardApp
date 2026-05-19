@@ -502,7 +502,8 @@ private struct AlbumImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: -60)
+        // 去掉之前的 .offset(y: -60)：VStack 布局下它会让灯柝顶逿进 nav bar 区域，
+        // 看起来像预览顶多了一条白条。
     }
 
     // 编辑模式下的可交互预览，几何与 EInkImageRenderer 同步，

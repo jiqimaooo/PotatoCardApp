@@ -877,7 +877,10 @@ struct GalleryImageViewer: View {
                 .allowsHitTesting(false)
         }
         .frame(width: 220, height: 352)
-        .offset(y: isContentLocked ? -14 : -60)
+        // 上一版是在全屏 ZStack 里、需要向上挑逿跳过底部按钮的 .offset(y: -60)；
+        // 现在在 VStack 里 devicePreview 被 topPreviewSection 的固定高度包住，
+        // 不再需要偏移——之前的 -60 会让顶部灯柝逿进 nav bar 区域，
+        // 表现为预览顶多了一条「白色 header」。
     }
 
     private var renderTargetSize: CGSize {
