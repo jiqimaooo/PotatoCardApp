@@ -388,8 +388,8 @@ struct ContentView: View {
 
     private var bluetoothStatusIcon: some View {
         let isConnecting = bleService.connectionPhase == .connecting
-        let isConnected = bleService.connectedDevice != nil || bleService.connectionPhase == .connected
-        let iconColor = (isConnected || isConnecting) ? accentColor : inactiveBluetoothIconColor
+        let hasScannedDevice = !bleService.devices.isEmpty
+        let iconColor = hasScannedDevice ? accentColor : inactiveBluetoothIconColor
 
         return ZStack {
             Capsule()
@@ -425,6 +425,7 @@ struct ContentView: View {
         .onChange(of: isConnecting) { newValue in
             bluetoothPulse = newValue
         }
+        .accessibilityLabel(hasScannedDevice ? "已扫描到蓝牙设备" : "未扫描到蓝牙设备")
     }
 
     private var batteryStatusPill: some View {
@@ -585,7 +586,7 @@ struct ContentView: View {
     }
 
     private var inactiveBluetoothIconColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.82) : Color.black.opacity(0.82)
+        colorScheme == .dark ? Color.white.opacity(0.46) : Color.black.opacity(0.34)
     }
 
     private var promptCardFillColor: Color {

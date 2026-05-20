@@ -30,6 +30,19 @@ struct MyView: View {
 
                 ProductSettingsSection(title: "通用设置") {
                     NavigationLink {
+                        CardPushShortcutSettingsView()
+                    } label: {
+                        ProductSettingsRow(
+                            title: "快捷指令设置",
+                            subtitle: "队列同步、图库存储",
+                            systemImage: "wand.and.rays"
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    ProductDivider()
+
+                    NavigationLink {
                         StorageSettingsView(usage: $usage, onReloadUsage: reloadStorageUsage)
                     } label: {
                         ProductSettingsRow(
@@ -157,7 +170,7 @@ struct MyView: View {
 
     @MainActor
     private func refreshCircleProfile() async {
-        guard !isRefreshingCircleProfile, let refreshToken = circleSessionStore.refreshToken else { return }
+        guard !isRefreshingCircleProfile, circleSessionStore.refreshToken != nil else { return }
         isRefreshingCircleProfile = true
         defer { isRefreshingCircleProfile = false }
 
@@ -167,8 +180,7 @@ struct MyView: View {
         )
 
         do {
-            let session = try await apiClient.refreshSession(refreshToken: refreshToken)
-            circleSessionStore.saveSession(session)
+            _ = try await circleSessionStore.validAccessToken(using: apiClient, forceRefresh: true)
         } catch {
             // 我的页头像刷新失败时保留本地缓存和占位图，不打断设置页面使用。
         }

@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class CircleSessionStore: ObservableObject {
     static let didSignOutNotification = Notification.Name("CircleSessionStoreDidSignOut")
+    private static var refreshTask: Task<CircleAuthSession, Error>?
 
     @Published private(set) var profile: CircleUserProfile?
 
@@ -90,6 +91,22 @@ final class CircleSessionStore: ObservableObject {
         self.profile = updatedProfile
     }
 
+    func validAccessToken(using apiClient: CircleAPIClient, forceRefresh: Bool = false) async throws -> String {
+        guard let refreshToken else {
+            throw CircleAPIError.missingAuthToken
+        }
+
+        if forceRefresh || shouldRefreshAccessToken {
+            let session = try await Self.refreshSession(refreshToken: refreshToken, using: apiClient)
+            saveSession(session)
+        }
+
+        guard let accessToken = token else {
+            throw CircleAPIError.missingAuthToken
+        }
+        return accessToken
+    }
+
     func signOut() {
         defaults.removeObject(forKey: Keys.accessToken)
         defaults.removeObject(forKey: Keys.refreshToken)
@@ -121,5 +138,18 @@ final class CircleSessionStore: ObservableObject {
             return nil
         }
         return Date(timeIntervalSince1970: expiry)
+    }
+
+    private static func refreshSession(refreshToken: String, using apiClient: CircleAPIClient) async throws -> CircleAuthSession {
+        if let refreshTask {
+            return try await refreshTask.value
+        }
+
+        let task = Task {
+            try await apiClient.refreshSession(refreshToken: refreshToken)
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
     }
 }

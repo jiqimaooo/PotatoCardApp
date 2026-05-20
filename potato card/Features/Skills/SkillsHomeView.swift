@@ -25,7 +25,6 @@ struct SkillsHomeView: View {
                 todoSkillCard
                 albumSkillCard
                 aiImageSkillCard
-                shortcutSettingsCard
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
@@ -334,56 +333,6 @@ struct SkillsHomeView: View {
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
         .frame(height: skillCardHeight)
-    }
-
-    private var shortcutSettingsCard: some View {
-        NavigationLink {
-            CardPushShortcutSettingsView()
-        } label: {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.42, green: 0.30, blue: 0.94),
-                                Color(red: 0.20, green: 0.64, blue: 0.98)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 42, height: 42)
-                    .overlay(
-                        Image(systemName: "wand.and.rays")
-                            .font(.system(size: 19, weight: .medium))
-                            .foregroundStyle(.white)
-                    )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("快捷指令")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(primaryTextColor)
-                    Text("队列同步、图库存储…")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(secondaryTextColor)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 10)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(secondaryTextColor)
-            }
-            .padding(14)
-            .background(cardFillColor.opacity(0.95), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(cardStrokeColor, lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.10 : 0.025), radius: 8, x: 0, y: 3)
-        }
-        .buttonStyle(.plain)
     }
 
     private var aiImageSkillCard: some View {

@@ -102,13 +102,21 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleAuthSession.self, from: data)
     }
 
-    func fetchPosts() async throws -> [CirclePost] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
+    func fetchPosts(cursor: String? = nil) async throws -> CircleFeedResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("community/posts"), resolvingAgainstBaseURL: false)
+        if let cursor, !cursor.isEmpty {
+            components?.queryItems = [URLQueryItem(name: "cursor", value: cursor)]
+        }
+        guard let url = components?.url else {
+            throw CircleAPIError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
         attachAuth(to: &request)
         let data = try await perform(request)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(CircleFeedResponse.self, from: data).items
+        return try decoder.decode(CircleFeedResponse.self, from: data)
     }
 
     func transferTicket(postID: String, accessToken: String? = nil) async throws -> CircleTransferTicket {

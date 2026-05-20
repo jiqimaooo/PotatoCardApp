@@ -106,15 +106,6 @@
 			);
 			sourceTree = "<group>";
 		};
-		C0DEC0DE0000000000000003 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */,
-				C0DEC0DE0000000000000002 /* Signing.local.example.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
 		A86A54272F894613001EC8F6 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -122,6 +113,15 @@
 				B1A000000000000000000002 /* TransferLiveActivityWidget.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C0DEC0DE0000000000000003 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				C0DEC0DE0000000000000001 /* Signing.shared.xcconfig */,
+				C0DEC0DE0000000000000002 /* Signing.local.example.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -398,6 +398,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
@@ -450,6 +451,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 					"$(PROJECT_DIR)/potato\\ card/Vendor/PickBleManager",
 				);
 				MARKETING_VERSION = 1.0;

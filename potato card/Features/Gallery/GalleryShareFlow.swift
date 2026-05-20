@@ -186,17 +186,7 @@ struct GalleryShareSheet: View {
 
     @MainActor
     private func validAccessToken(forceRefresh: Bool = false) async throws -> String {
-        guard let refreshToken = sessionStore.refreshToken else {
-            throw CircleAPIError.missingAuthToken
-        }
-        if forceRefresh || sessionStore.shouldRefreshAccessToken {
-            let session = try await apiClient.refreshSession(refreshToken: refreshToken)
-            sessionStore.saveSession(session)
-        }
-        guard let token = sessionStore.token else {
-            throw CircleAPIError.missingAuthToken
-        }
-        return token
+        try await sessionStore.validAccessToken(using: apiClient, forceRefresh: forceRefresh)
     }
 
     private static func defaultAPIClient() -> CircleAPIClient {

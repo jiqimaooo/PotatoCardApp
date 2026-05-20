@@ -18,9 +18,12 @@ struct CircleFeedView: View {
     let posts: [CirclePost]
     let viewedPostIDs: Set<String>
     let isImageLoadingEnabled: Bool
+    let hasMorePosts: Bool
+    let isLoadingMorePosts: Bool
     let onTransfer: (CirclePost) -> Void
     let onReport: (CirclePost) -> Void
     let onRefresh: () -> Void
+    let onLoadMore: () -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
 
     var body: some View {
@@ -48,7 +51,17 @@ struct CircleFeedView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
-                .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
+
+                if hasMorePosts || isLoadingMorePosts {
+                    CircleFeedLoadMoreView(isLoading: isLoadingMorePosts)
+                        .onAppear {
+                            guard hasMorePosts else { return }
+                            onLoadMore()
+                        }
+                } else {
+                    Color.clear
+                        .frame(height: AppBottomBarMetrics.scrollContentBottomPadding)
+                }
             }
         }
         .coordinateSpace(name: CircleFeedScrollCoordinateSpace.name)
@@ -77,6 +90,25 @@ struct CircleFeedView: View {
         }
 
         return (left, right)
+    }
+}
+
+private struct CircleFeedLoadMoreView: View {
+    let isLoading: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                Text("加载更多")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .padding(.bottom, AppBottomBarMetrics.scrollContentBottomPadding)
     }
 }
 

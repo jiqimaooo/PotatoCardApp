@@ -80,6 +80,8 @@ struct CirclePost: Codable, Equatable, Identifiable {
 
 struct CircleFeedResponse: Codable {
     let items: [CirclePost]
+    let nextCursor: String?
+    let hasMore: Bool
 }
 
 struct CircleDriftBottleDrawResponse: Codable {

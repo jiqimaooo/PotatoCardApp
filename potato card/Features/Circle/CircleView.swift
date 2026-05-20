@@ -9,6 +9,9 @@ struct CircleView: View {
     @State private var isComposerPresented = false
     @State private var isDriftBottleThrowPresented = false
     @State private var isLoadingPosts = false
+    @State private var isLoadingMorePosts = false
+    @State private var nextPostsCursor: String?
+    @State private var hasMorePosts = false
     @State private var hasCompletedInitialPostsLoad = false
     @State private var transferStatusVisibilityTask: Task<Void, Never>?
     @State private var isTransferStatusVisible = false
@@ -136,6 +139,10 @@ struct CircleView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: CircleSessionStore.didSignOutNotification)) { _ in
             posts = []
+            isLoadingPosts = false
+            isLoadingMorePosts = false
+            nextPostsCursor = nil
+            hasMorePosts = false
             toastMessage = nil
             isPublishStatusVisible = false
             isComposerPresented = false
@@ -288,9 +295,12 @@ struct CircleView: View {
                 posts: posts,
                 viewedPostIDs: viewedPostIDs,
                 isImageLoadingEnabled: selectedFeedSection == section,
+                hasMorePosts: hasMorePosts,
+                isLoadingMorePosts: isLoadingMorePosts,
                 onTransfer: openTransferSheet,
                 onReport: handleReport,
                 onRefresh: refreshPosts,
+                onLoadMore: loadMorePostsIfNeeded,
                 onScrollOffsetChange: handleFeedScrollOffset
             )
         case .following:
@@ -300,9 +310,12 @@ struct CircleView: View {
                 posts: latestPosts,
                 viewedPostIDs: viewedPostIDs,
                 isImageLoadingEnabled: selectedFeedSection == section,
+                hasMorePosts: hasMorePosts,
+                isLoadingMorePosts: isLoadingMorePosts,
                 onTransfer: openTransferSheet,
                 onReport: handleReport,
                 onRefresh: refreshPosts,
+                onLoadMore: loadMorePostsIfNeeded,
                 onScrollOffsetChange: handleFeedScrollOffset
             )
         case .driftBottle:
@@ -321,7 +334,9 @@ struct CircleView: View {
         case .imageToken:
             CircleImageTokenTransferView(
                 apiClient: sessionAPIClient,
-                accessToken: sessionStore.token,
+                accessTokenProvider: { forceRefresh in
+                    try await validAccessToken(forceRefresh: forceRefresh)
+                },
                 onSessionError: handleSessionError,
                 onToast: showToast
             )
@@ -630,12 +645,15 @@ struct CircleView: View {
     private func refreshPosts() {
         guard !isLoadingPosts else { return }
         isLoadingPosts = true
+        isLoadingMorePosts = false
         Task {
             do {
-                let fetchedPosts = try await fetchPostsWithRefresh()
-                posts = fetchedPosts
-                saveCachedPosts(fetchedPosts)
-                syncCurrentProfileAvatar(from: fetchedPosts)
+                let page = try await fetchPostsWithRefresh(cursor: nil)
+                posts = page.items
+                nextPostsCursor = page.nextCursor
+                hasMorePosts = page.hasMore
+                saveCachedPosts(page.items)
+                syncCurrentProfileAvatar(from: page.items)
             } catch {
                 handleSessionError(error)
             }
@@ -651,10 +669,12 @@ struct CircleView: View {
                 try await createPostWithRefresh(imageData: imageData, title: title, tags: tags)
                 showPublishStatus(.succeeded)
                 do {
-                    let fetchedPosts = try await fetchPostsWithRefresh()
-                    posts = fetchedPosts
-                    saveCachedPosts(fetchedPosts)
-                    syncCurrentProfileAvatar(from: fetchedPosts)
+                    let page = try await fetchPostsWithRefresh(cursor: nil)
+                    posts = page.items
+                    nextPostsCursor = page.nextCursor
+                    hasMorePosts = page.hasMore
+                    saveCachedPosts(page.items)
+                    syncCurrentProfileAvatar(from: page.items)
                 } catch {
                     showToast("发布成功，但刷新失败：\(error.localizedDescription)", style: .error)
                 }
@@ -683,14 +703,38 @@ struct CircleView: View {
         }
     }
 
-    private func fetchPostsWithRefresh() async throws -> [CirclePost] {
+    private func fetchPostsWithRefresh(cursor: String?) async throws -> CircleFeedResponse {
         _ = try await validAccessToken()
         do {
-            return try await sessionAPIClient.fetchPosts()
+            return try await sessionAPIClient.fetchPosts(cursor: cursor)
         } catch CircleAPIError.unauthorized {
             _ = try await validAccessToken(forceRefresh: true)
-            return try await sessionAPIClient.fetchPosts()
+            return try await sessionAPIClient.fetchPosts(cursor: cursor)
         }
+    }
+
+    private func loadMorePostsIfNeeded() {
+        guard !isLoadingPosts, !isLoadingMorePosts, hasMorePosts, let cursor = nextPostsCursor else { return }
+        isLoadingMorePosts = true
+
+        Task {
+            do {
+                let page = try await fetchPostsWithRefresh(cursor: cursor)
+                appendPosts(page.items)
+                nextPostsCursor = page.nextCursor
+                hasMorePosts = page.hasMore
+                saveCachedPosts(posts)
+                syncCurrentProfileAvatar(from: page.items)
+            } catch {
+                handleSessionError(error)
+            }
+            isLoadingMorePosts = false
+        }
+    }
+
+    private func appendPosts(_ pagePosts: [CirclePost]) {
+        let existingIDs = Set(posts.map(\.id))
+        posts.append(contentsOf: pagePosts.filter { !existingIDs.contains($0.id) })
     }
 
     private func createPostWithRefresh(imageData: Data, title: String, tags: [String]) async throws {
@@ -796,19 +840,7 @@ struct CircleView: View {
     }
 
     private func validAccessToken(forceRefresh: Bool = false) async throws -> String {
-        guard let refreshToken = sessionStore.refreshToken else {
-            throw CircleAPIError.missingAuthToken
-        }
-
-        if forceRefresh || sessionStore.shouldRefreshAccessToken {
-            let session = try await apiClient.refreshSession(refreshToken: refreshToken)
-            sessionStore.saveSession(session)
-        }
-
-        guard let accessToken = sessionStore.token else {
-            throw CircleAPIError.missingAuthToken
-        }
-        return accessToken
+        try await sessionStore.validAccessToken(using: apiClient, forceRefresh: forceRefresh)
     }
 
     private func handleExpiredSession() {
@@ -925,7 +957,7 @@ private struct CircleImageTokenTransferView: View {
     }
 
     let apiClient: CircleAPIClient
-    let accessToken: String?
+    let accessTokenProvider: (Bool) async throws -> String
     let onSessionError: (Error) -> Void
     let onToast: (String, CircleToastMessage.Style) -> Void
 
@@ -1334,13 +1366,15 @@ private struct CircleImageTokenTransferView: View {
         isCreating = true
         Task {
             do {
-                let token = try await apiClient.createImageToken(
-                    imageData: selectedImageData,
-                    tokenCode: customTokenCode,
-                    isBurnAfterRead: isBurnAfterRead,
-                    expiresInHours: expiresInHours,
-                    accessToken: accessToken
-                )
+                let token = try await performAuthenticated { accessToken in
+                    try await apiClient.createImageToken(
+                        imageData: selectedImageData,
+                        tokenCode: customTokenCode,
+                        isBurnAfterRead: isBurnAfterRead,
+                        expiresInHours: expiresInHours,
+                        accessToken: accessToken
+                    )
+                }
                 await MainActor.run {
                     createdToken = token
                     customTokenCode = ""
@@ -1363,7 +1397,9 @@ private struct CircleImageTokenTransferView: View {
         isClaiming = true
         Task {
             do {
-                let token = try await apiClient.claimImageToken(tokenCode: code, accessToken: accessToken)
+                let token = try await performAuthenticated { accessToken in
+                    try await apiClient.claimImageToken(tokenCode: code, accessToken: accessToken)
+                }
                 await MainActor.run {
                     upsertReceivedToken(token)
                     claimCode = ""
@@ -1384,7 +1420,9 @@ private struct CircleImageTokenTransferView: View {
         isLoadingReceived = true
         defer { isLoadingReceived = false }
         do {
-            receivedTokens = try await apiClient.fetchReceivedImageTokens(accessToken: accessToken)
+            receivedTokens = try await performAuthenticated { accessToken in
+                try await apiClient.fetchReceivedImageTokens(accessToken: accessToken)
+            }
         } catch {
             onSessionError(error)
         }
@@ -1405,7 +1443,9 @@ private struct CircleImageTokenTransferView: View {
         isPreparingTokenTransfer = true
         Task {
             do {
-                let image = try await apiClient.downloadImageTokenTransferImage(id: token.id, accessToken: accessToken)
+                let image = try await performAuthenticated { accessToken in
+                    try await apiClient.downloadImageTokenTransferImage(id: token.id, accessToken: accessToken)
+                }
                 let displayImage = EInkImageRenderer.render(
                     image: image,
                     targetSize: device.profile.pixelSize,
@@ -1442,11 +1482,13 @@ private struct CircleImageTokenTransferView: View {
             let deviceID = bleService.connectedDevice?.id ?? bleService.selectedDevice?.id
             Task {
                 do {
-                    let updated = try await apiClient.recordImageTokenTransfer(
-                        id: pendingTransferToken.id,
-                        deviceID: deviceID,
-                        accessToken: accessToken
-                    )
+                    let updated = try await performAuthenticated { accessToken in
+                        try await apiClient.recordImageTokenTransfer(
+                            id: pendingTransferToken.id,
+                            deviceID: deviceID,
+                            accessToken: accessToken
+                        )
+                    }
                     await MainActor.run {
                         upsertReceivedToken(updated)
                         self.pendingTransferToken = nil
@@ -1497,6 +1539,16 @@ private struct CircleImageTokenTransferView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func performAuthenticated<T>(_ operation: (String) async throws -> T) async throws -> T {
+        let accessToken = try await accessTokenProvider(false)
+        do {
+            return try await operation(accessToken)
+        } catch CircleAPIError.unauthorized {
+            let refreshedToken = try await accessTokenProvider(true)
+            return try await operation(refreshedToken)
         }
     }
 }
