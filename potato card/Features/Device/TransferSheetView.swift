@@ -12,7 +12,7 @@ struct TransferSheetView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.dismiss) private var dismiss
     @State private var adjustment = EInkManualAdjustment.default
-    @State private var selectedDitherAlgorithm: EInkDitherAlgorithm = .floydSteinberg
+    @State private var selectedDitherAlgorithm: EInkDitherAlgorithm?
     @State private var didLoadInitialState = false
     @State private var isAlgorithmExpanded = false
     @State private var isAdjustmentExpanded = false
@@ -182,15 +182,16 @@ struct TransferSheetView: View {
     private var algorithmSection: some View {
         Section {
             DisclosureGroup(isExpanded: $isAlgorithmExpanded) {
+                defaultAlgorithmRow
                 ForEach(EInkDitherAlgorithm.allCases) { algorithm in
                     algorithmRow(algorithm)
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("全局图像算法")
+                    Text("图像算法")
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text(selectedDitherAlgorithm.title)
+                    Text(selectedAlgorithmTitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -198,10 +199,38 @@ struct TransferSheetView: View {
         }
     }
 
+    private var defaultAlgorithmRow: some View {
+        Button {
+            selectedDitherAlgorithm = nil
+            saveEditStateIfNeeded()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("默认")
+                        .foregroundStyle(.primary)
+                    Text("跟随我的页面全局算法：\(bleService.ditherAlgorithm.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if selectedDitherAlgorithm == nil {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isTransferInProgress)
+    }
+
     private func algorithmRow(_ algorithm: EInkDitherAlgorithm) -> some View {
         Button {
             selectedDitherAlgorithm = algorithm
-            bleService.setDitherAlgorithm(algorithm)
+            saveEditStateIfNeeded()
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -247,7 +276,7 @@ struct TransferSheetView: View {
                     image: transferImage,
                     displayImage: displayImage,
                     to: device,
-                    algorithm: selectedDitherAlgorithm
+                    algorithm: effectiveDitherAlgorithm
                 )
             } label: {
                 TransferProgressButtonLabel(
@@ -305,10 +334,12 @@ struct TransferSheetView: View {
     private func loadInitialStateIfNeeded() {
         guard !didLoadInitialState else { return }
         didLoadInitialState = true
-        selectedDitherAlgorithm = bleService.ditherAlgorithm
+
+        if let editStateKey {
+            selectedDitherAlgorithm = TransferEditStateStore.loadAlgorithmOverride(for: editStateKey)
+        }
 
         guard let editStateKey, let savedAdjustment = TransferEditStateStore.load(for: editStateKey) else { return }
-        // 单图只恢复缩放和偏移，图像算法仍然走全局设置。
         adjustment = savedAdjustment
         // 已经有调整记录的图直接展开手动调整面板，让用户一眼看到状态。
         isAdjustmentExpanded = savedAdjustment != .default
@@ -316,11 +347,11 @@ struct TransferSheetView: View {
 
     private func saveEditStateIfNeeded() {
         guard let editStateKey else { return }
-        // 默认值不需要持久化，直接删除记录，避免一级页面“黄色”标记误点亮。
-        if adjustment == .default {
+        // 默认调整 + 默认算法不需要持久化，避免一级页面“已编辑”标记误点亮。
+        if adjustment == .default && selectedDitherAlgorithm == nil {
             TransferEditStateStore.delete(for: editStateKey)
         } else {
-            TransferEditStateStore.save(adjustment, for: editStateKey)
+            TransferEditStateStore.save(adjustment, algorithmOverride: selectedDitherAlgorithm, for: editStateKey)
         }
     }
 
@@ -386,8 +417,19 @@ struct TransferSheetView: View {
             fitMode: .manual,
             adjustment: adjustment,
             profile: profile,
-            ditherAlgorithm: selectedDitherAlgorithm
+            ditherAlgorithm: effectiveDitherAlgorithm
         )
+    }
+
+    private var effectiveDitherAlgorithm: EInkDitherAlgorithm {
+        selectedDitherAlgorithm ?? bleService.ditherAlgorithm
+    }
+
+    private var selectedAlgorithmTitle: String {
+        if let selectedDitherAlgorithm {
+            return selectedDitherAlgorithm.title
+        }
+        return "默认 · \(bleService.ditherAlgorithm.title)"
     }
 
     private var renderTargetSize: CGSize {

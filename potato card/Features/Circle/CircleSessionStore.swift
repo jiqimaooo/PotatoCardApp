@@ -91,6 +91,18 @@ final class CircleSessionStore: ObservableObject {
         self.profile = updatedProfile
     }
 
+    func updateProfile(_ profile: CircleUserProfile) {
+        defaults.set(profile.id, forKey: Keys.userID)
+        defaults.set(profile.username, forKey: Keys.username)
+        defaults.set(profile.avatarKey, forKey: Keys.avatarKey)
+        if let avatarUrl = profile.avatarUrl {
+            defaults.set(avatarUrl.absoluteString, forKey: Keys.avatarURL)
+        } else {
+            defaults.removeObject(forKey: Keys.avatarURL)
+        }
+        self.profile = profile
+    }
+
     func validAccessToken(using apiClient: CircleAPIClient, forceRefresh: Bool = false) async throws -> String {
         guard let refreshToken else {
             throw CircleAPIError.missingAuthToken

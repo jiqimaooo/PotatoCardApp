@@ -712,11 +712,7 @@ struct GalleryImageViewer: View {
         guard photos.indices.contains(selectedIndex) else { return }
         let photo = photos[selectedIndex]
         let key = editStateKeyForPhoto(photo)
-        if draftAdjustment == .default {
-            TransferEditStateStore.delete(for: key)
-        } else {
-            TransferEditStateStore.save(draftAdjustment, for: key)
-        }
+        TransferEditStateStore.saveAdjustmentPreservingAlgorithm(draftAdjustment, for: key)
         refreshCustomizedPhotoIDs()
     }
 
@@ -795,7 +791,9 @@ struct GalleryImageViewer: View {
             return TransferEditStateStore.load(for: editStateKeyForPhoto(photo)) ?? .default
         }()
         let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
-        let transferImage = transferImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
+        let editStateKey = editStateKeyForPhoto(photo)
+        let imageAlgorithm = TransferEditStateStore.loadAlgorithmOverride(for: editStateKey) ?? bleService.ditherAlgorithm
+        let transferImage = transferImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment, algorithm: imageAlgorithm)
         let displayImage = displayImage(from: image, device: device, fitMode: fitMode, adjustment: adjustment)
         // 给主界面 / 上次传输缓存的 imageData：
         //   - 默认值（无任何调整）→ 维持原始 imageData，质量更高
@@ -810,14 +808,15 @@ struct GalleryImageViewer: View {
         }
         pendingTransferData = recordedData
         pendingTransferImage = displayImage
-        bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
+        bleService.transfer(image: transferImage, displayImage: displayImage, to: device, algorithm: imageAlgorithm)
     }
 
     private func transferImage(
         from image: UIImage,
         device: BleDevice,
         fitMode: EInkImageFitMode,
-        adjustment: EInkManualAdjustment
+        adjustment: EInkManualAdjustment,
+        algorithm: EInkDitherAlgorithm
     ) -> UIImage {
         EInkImageRenderer.renderForTransfer(
             image: image,
@@ -825,7 +824,7 @@ struct GalleryImageViewer: View {
             fitMode: fitMode,
             adjustment: adjustment,
             profile: device.profile,
-            ditherAlgorithm: bleService.ditherAlgorithm
+            ditherAlgorithm: algorithm
         )
     }
 
@@ -1031,11 +1030,7 @@ struct GalleryImageViewer: View {
 
     private func refreshCustomizedPhotoIDs() {
         let customized = photos.compactMap { photo -> UUID? in
-            guard let saved = TransferEditStateStore.load(for: editStateKeyForPhoto(photo)),
-                  saved != .default else {
-                return nil
-            }
-            return photo.id
+            TransferEditStateStore.hasCustomization(for: editStateKeyForPhoto(photo)) ? photo.id : nil
         }
         customizedPhotoIDs = Set(customized)
     }

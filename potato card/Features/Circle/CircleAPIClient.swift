@@ -83,6 +83,23 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleAvatarUploadResponse.self, from: data).avatarKey
     }
 
+    func updateProfileAvatar(avatarKey: String, accessToken: String? = nil) async throws -> CircleUserProfile {
+        var request = URLRequest(url: baseURL.appendingPathComponent("me/avatar"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        request.setJSONBody(UpdateAvatarBody(avatarKey: avatarKey))
+        let data = try await perform(request)
+        return try JSONDecoder().decode(CircleUserProfile.self, from: data)
+    }
+
+    func changePassword(currentPassword: String, newPassword: String, accessToken: String? = nil) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("me/password"))
+        request.httpMethod = "POST"
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        request.setJSONBody(ChangePasswordBody(currentPassword: currentPassword, newPassword: newPassword))
+        _ = try await perform(request)
+    }
+
     func loginWithPassword(username: String, password: String) async throws -> CircleAuthSession {
         var request = URLRequest(url: baseURL.appendingPathComponent("auth/password/login"))
         request.httpMethod = "POST"
@@ -342,6 +359,15 @@ struct CircleAPIClient {
 
     private struct CircleAvatarUploadResponse: Decodable {
         let avatarKey: String
+    }
+
+    private struct UpdateAvatarBody: Encodable {
+        let avatarKey: String
+    }
+
+    private struct ChangePasswordBody: Encodable {
+        let currentPassword: String
+        let newPassword: String
     }
 
     private struct ImageTokenTransferEventBody: Encodable {

@@ -1586,6 +1586,13 @@ private struct CircleBetaNoticeSheet: View {
         "圈子身份信息",
     ]
 
+    private let projectRiskItems = [
+        "服务调整或暂停",
+        "部分功能下线",
+        "数据清理或重置",
+        "项目停止维护",
+    ]
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -1599,8 +1606,12 @@ private struct CircleBetaNoticeSheet: View {
 
                     noticeSection(title: nil, items: dataItems)
 
-                    paragraph("请勿将 Beta 阶段服务用于重要数据的长期存储。")
-                    paragraph("后续正式版本上线后，圈子系统与数据机制会逐步稳定完善。")
+                    paragraph("土豆圈现阶段主要依靠作者个人投入与维护（即“为爱发电”）。")
+                    paragraph("由于项目仍处于早期阶段，未来的运营方式、服务周期及功能规划均存在不确定性，因此暂时无法保证长期持续运营或永久提供服务。")
+
+                    noticeSection(title: "后续不排除出现以下情况：", items: projectRiskItems)
+
+                    paragraph("请大家理性体验 Beta 版本，不建议存储重要或唯一的数据内容。")
                     paragraph("感谢大家参与测试与反馈 🥔")
                 }
                 .padding(.horizontal, 22)

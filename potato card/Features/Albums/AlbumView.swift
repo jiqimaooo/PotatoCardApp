@@ -345,6 +345,8 @@ private struct AlbumImageViewer: View {
         // 当前选中那张优先用 in-memory draft，避免 onChange 异步还没写回 storage 的瞬间漏掉。
         let adjustment = draftAdjustment
         let fitMode: EInkImageFitMode = adjustment == .default ? .centerCrop : .manual
+        let editStateKey = TransferEditStateKey.album(albums[selectedIndex])
+        let imageAlgorithm = TransferEditStateStore.loadAlgorithmOverride(for: editStateKey) ?? bleService.ditherAlgorithm
 
         let transferImage = EInkImageRenderer.renderForTransfer(
             image: image,
@@ -352,7 +354,7 @@ private struct AlbumImageViewer: View {
             fitMode: fitMode,
             adjustment: adjustment,
             profile: device.profile,
-            ditherAlgorithm: bleService.ditherAlgorithm
+            ditherAlgorithm: imageAlgorithm
         )
         let displayImage = EInkImageRenderer.render(
             image: image,
@@ -362,7 +364,7 @@ private struct AlbumImageViewer: View {
         )
         pendingTransferAlbum = albums[selectedIndex]
         pendingTransferImage = displayImage
-        bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
+        bleService.transfer(image: transferImage, displayImage: displayImage, to: device, algorithm: imageAlgorithm)
     }
 
     // MARK: - Bottom layout
@@ -411,8 +413,7 @@ private struct AlbumImageViewer: View {
     private var currentAlbumIsCustomized: Bool {
         guard albums.indices.contains(selectedIndex) else { return false }
         let key = TransferEditStateKey.album(albums[selectedIndex])
-        guard let saved = TransferEditStateStore.load(for: key) else { return false }
-        return saved != .default
+        return TransferEditStateStore.hasCustomization(for: key)
     }
 
     private func enterEditMode() {
@@ -447,11 +448,7 @@ private struct AlbumImageViewer: View {
 
     private func persistDraftIfNeeded() {
         let key = TransferEditStateKey.album(albums[selectedIndex])
-        if draftAdjustment == .default {
-            TransferEditStateStore.delete(for: key)
-        } else {
-            TransferEditStateStore.save(draftAdjustment, for: key)
-        }
+        TransferEditStateStore.saveAdjustmentPreservingAlgorithm(draftAdjustment, for: key)
     }
 
     private func resetGestureBaselines() {

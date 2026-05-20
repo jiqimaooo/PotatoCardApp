@@ -212,12 +212,18 @@ struct SkillsHomeView: View {
                         .foregroundStyle(primaryTextColor.opacity(0.78))
                         .lineLimit(1)
 
-                    Text("打开")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 38)
-                        .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    HStack(spacing: 8) {
+                        Text("打开")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                        // 和专辑卡片保持一致，右侧预留设置按钮宽度，避免“打开”按钮被撑得过长。
+                        Color.clear
+                            .frame(width: 84, height: 38)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
