@@ -11,6 +11,7 @@ struct SkillsHomeView: View {
     @State private var didHandleActiveSyncSuccess = false
     @State private var showsWeatherSampleData = false
     @State private var weatherSampleSnapshot = WeatherSkillMockData.snapshot()
+    @State private var hasWeReadAPIKey = WeReadAPIKeyStore.exists()
 
     init(onAlbumTransferToDevice: @escaping (String) -> Void = { _ in }) {
         self.onAlbumTransferToDevice = onAlbumTransferToDevice
@@ -25,6 +26,7 @@ struct SkillsHomeView: View {
                 todoSkillCard
                 albumSkillCard
                 aiImageSkillCard
+                weReadSkillCard
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
@@ -33,6 +35,7 @@ struct SkillsHomeView: View {
         .task {
             await weatherStore.onAppear()
             backfillTargetDeviceSelectionIfNeeded()
+            refreshWeReadAPIKeyState()
         }
         .onChange(of: bleService.connectedDevice?.id) { _ in
             backfillTargetDeviceSelectionIfNeeded()
@@ -42,6 +45,9 @@ struct SkillsHomeView: View {
         }
         .onChange(of: bleService.transferPhase) { phase in
             handleTransferPhaseChange(phase)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .weReadAPIKeyDidChange)) { _ in
+            refreshWeReadAPIKeyState()
         }
     }
 
@@ -414,6 +420,79 @@ struct SkillsHomeView: View {
         .frame(height: skillCardHeight)
     }
 
+    private var weReadSkillCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.10, green: 0.63, blue: 0.48),
+                                    Color(red: 0.18, green: 0.49, blue: 0.98)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 42, height: 42)
+                        .overlay(
+                            Image(systemName: "books.vertical.fill")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.white)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("微信读书")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(primaryTextColor)
+
+                        Text(hasWeReadAPIKey ? "已保存 Key，可直接读取微信读书数据" : "一键跳转领 Key，回到 App 直接接入")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+
+                Text(hasWeReadAPIKey ? "书架 · 笔记 · 书评 · 推荐 · 阅读统计" : "官方 Skill 网关 · 本机 Keychain 保存")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(primaryTextColor.opacity(0.78))
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    NavigationLink {
+                        WeReadSkillSetupView()
+                    } label: {
+                        Text(hasWeReadAPIKey ? "管理" : "接入")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Color.clear
+                        .frame(width: 84, height: 38)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            weReadPreview
+                .frame(width: 88, height: 132)
+        }
+        .padding(14)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 10, x: 0, y: 4)
+        .frame(height: skillCardHeight)
+    }
+
     private var weatherPreview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -507,6 +586,43 @@ struct SkillsHomeView: View {
                 Text("AI")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.46))
+            }
+        }
+    }
+
+    private var weReadPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.10) : Color.white)
+                .shadow(color: Color.black.opacity(0.035), radius: 6, x: 0, y: 3)
+
+            VStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.90, green: 0.97, blue: 0.94),
+                                Color(red: 0.88, green: 0.93, blue: 1.0)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 56, height: 72)
+                    .overlay(
+                        VStack(spacing: 6) {
+                            Image(systemName: "book.pages.fill")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.10, green: 0.63, blue: 0.48))
+                            Capsule()
+                                .fill(accentColor.opacity(0.78))
+                                .frame(width: 28, height: 4)
+                        }
+                    )
+
+                Label(hasWeReadAPIKey ? "READY" : "TOKEN", systemImage: hasWeReadAPIKey ? "checkmark.seal.fill" : "key.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(hasWeReadAPIKey ? Color(red: 0.10, green: 0.63, blue: 0.48) : accentColor)
             }
         }
     }
@@ -723,6 +839,10 @@ struct SkillsHomeView: View {
         if targetID == activeDevice.id, weatherStore.config.targetDeviceSnapshot == nil {
             weatherStore.updateTargetDevice(activeDevice)
         }
+    }
+
+    private func refreshWeReadAPIKeyState() {
+        hasWeReadAPIKey = WeReadAPIKeyStore.exists()
     }
 
 }
