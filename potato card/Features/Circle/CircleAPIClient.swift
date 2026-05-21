@@ -144,23 +144,23 @@ struct CircleAPIClient {
         return try JSONDecoder().decode(CircleTransferTicket.self, from: data)
     }
 
-    func createPost(imageData: Data, title: String, tags: [String], accessToken: String? = nil) async throws {
+    func createPost(uploadPayload: CirclePostUploadPayload, title: String, tags: [String], accessToken: String? = nil) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/posts"))
         request.httpMethod = "POST"
         try attachRequiredAuth(to: &request, accessToken: accessToken)
         let boundary = "Boundary-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = multipartBody(boundary: boundary, imageData: imageData, title: title, tags: tags)
+        request.httpBody = multipartBody(boundary: boundary, uploadPayload: uploadPayload, title: title, tags: tags)
         _ = try await perform(request)
     }
 
-    func createDriftBottle(imageData: Data, accessToken: String? = nil) async throws {
+    func createDriftBottle(uploadPayload: CirclePostUploadPayload, accessToken: String? = nil) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/drift-bottles"))
         request.httpMethod = "POST"
         try attachRequiredAuth(to: &request, accessToken: accessToken)
         let boundary = "Boundary-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = imageOnlyMultipartBody(boundary: boundary, imageData: imageData)
+        request.httpBody = multipartBody(boundary: boundary, uploadPayload: uploadPayload, title: "漂流瓶", tags: [])
         _ = try await perform(request)
     }
 
@@ -175,7 +175,7 @@ struct CircleAPIClient {
     }
 
     func createImageToken(
-        imageData: Data,
+        uploadPayload: CirclePostUploadPayload,
         tokenCode: String?,
         isBurnAfterRead: Bool,
         expiresInHours: Int,
@@ -188,7 +188,7 @@ struct CircleAPIClient {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = imageTokenMultipartBody(
             boundary: boundary,
-            imageData: imageData,
+            uploadPayload: uploadPayload,
             tokenCode: tokenCode,
             isBurnAfterRead: isBurnAfterRead,
             expiresInHours: expiresInHours
@@ -221,6 +221,12 @@ struct CircleAPIClient {
         return image
     }
 
+    func downloadImageTokenTransferPayload(id: String, accessToken: String? = nil) async throws -> Data {
+        var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/\(id)/transfer-payload"))
+        try attachRequiredAuth(to: &request, accessToken: accessToken)
+        return try await perform(request)
+    }
+
     func recordImageTokenTransfer(id: String, deviceID: String?, accessToken: String? = nil) async throws -> CircleImageToken {
         var request = URLRequest(url: baseURL.appendingPathComponent("community/image-tokens/\(id)/transfer-events"))
         request.httpMethod = "POST"
@@ -236,6 +242,13 @@ struct CircleAPIClient {
         guard (200..<300).contains(http.statusCode) else { throw CircleAPIError.httpStatus(http.statusCode) }
         guard let image = UIImage(data: data) else { throw CircleAPIError.invalidResponse }
         return image
+    }
+
+    func downloadDevicePayload(from url: URL) async throws -> Data {
+        let (data, response) = try await urlSession.data(from: url)
+        guard let http = response as? HTTPURLResponse else { throw CircleAPIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else { throw CircleAPIError.httpStatus(http.statusCode) }
+        return data
     }
 
     private func attachAuth(to request: inout URLRequest) {
@@ -284,14 +297,23 @@ struct CircleAPIClient {
         return nil
     }
 
-    private func multipartBody(boundary: String, imageData: Data, title: String, tags: [String]) -> Data {
+    private func multipartBody(boundary: String, uploadPayload: CirclePostUploadPayload, title: String, tags: [String]) -> Data {
         var data = Data()
         appendField("title", title, boundary: boundary, to: &data)
         appendField("tags", tags.joined(separator: ","), boundary: boundary, to: &data)
+        if let metaData = try? JSONEncoder().encode(uploadPayload.payloadMeta),
+           let metaJSON = String(data: metaData, encoding: .utf8) {
+            appendField("payloadMeta", metaJSON, boundary: boundary, to: &data)
+        }
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"post.jpg\"\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"original.jpg\"\r\n".data(using: .utf8)!)
         data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-        data.append(imageData)
+        data.append(uploadPayload.originalImageData)
+        data.append("\r\n".data(using: .utf8)!)
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"devicePayload\"; filename=\"potato_400x600.bin\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        data.append(uploadPayload.devicePayloadData)
         data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
         return data
     }
@@ -306,19 +328,9 @@ struct CircleAPIClient {
         return data
     }
 
-    private func imageOnlyMultipartBody(boundary: String, imageData: Data) -> Data {
-        var data = Data()
-        data.append("--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("Content-Disposition: form-data; name=\"image\"; filename=\"drift-bottle.jpg\"\r\n".data(using: .utf8)!)
-        data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-        data.append(imageData)
-        data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        return data
-    }
-
     private func imageTokenMultipartBody(
         boundary: String,
-        imageData: Data,
+        uploadPayload: CirclePostUploadPayload,
         tokenCode: String?,
         isBurnAfterRead: Bool,
         expiresInHours: Int
@@ -329,10 +341,19 @@ struct CircleAPIClient {
         }
         appendField("isBurnAfterRead", isBurnAfterRead ? "true" : "false", boundary: boundary, to: &data)
         appendField("expiresInHours", "\(expiresInHours)", boundary: boundary, to: &data)
+        if let metaData = try? JSONEncoder().encode(uploadPayload.payloadMeta),
+           let metaJSON = String(data: metaData, encoding: .utf8) {
+            appendField("payloadMeta", metaJSON, boundary: boundary, to: &data)
+        }
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
         data.append("Content-Disposition: form-data; name=\"image\"; filename=\"image-token.jpg\"\r\n".data(using: .utf8)!)
         data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-        data.append(imageData)
+        data.append(uploadPayload.originalImageData)
+        data.append("\r\n".data(using: .utf8)!)
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"devicePayload\"; filename=\"potato_400x600.bin\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        data.append(uploadPayload.devicePayloadData)
         data.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
         return data
     }
