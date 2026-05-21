@@ -43,10 +43,8 @@ struct TransferSheetView: View {
                 Section {
                     interactivePreview
                         .frame(maxWidth: .infinity)
-                        // 设备模型自身高度是 352；这里必须给 Form 行留足高度，
-                        // 否则图库长按进入编辑页时会把模型上下裁掉，露出矩形行背景。
-                        .frame(height: 372)
-                        .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
+                        .frame(height: 320)
+                        .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
 
@@ -496,7 +494,7 @@ struct TransferProgressButtonLabel: View {
 // 上方的“土豆片”支持触控交互的预览：一指/双指拖动 = 偏移，双指捏合 = 缩放，双指旋转 = 旋转。
 // 这些手势都用 .gesture 而不是 simultaneousGesture，确保触发时不会抢占 sheet 自身的下滑关闭手势——
 // 下滑关闭由 NavigationStack 的标题栏 / .presentationDragIndicator 区域处理，跟交互区互不冲突。
-struct InteractiveDevicePreview: View {
+private struct InteractiveDevicePreview: View {
     let sourceImage: UIImage
     @Binding var adjustment: EInkManualAdjustment
     let renderTargetSize: CGSize
@@ -508,20 +506,18 @@ struct InteractiveDevicePreview: View {
 
     var body: some View {
         ZStack {
-            screen
-                .frame(width: 186, height: 280)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .offset(y: -19)
-                .gesture(isInteractive ? combinedGesture : nil)
-
             Image("ink_tatoo2")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 220)
-                .shadow(color: Color.black.opacity(0.14), radius: 16, x: 0, y: 10)
+                .frame(width: 230, height: 310)
                 .allowsHitTesting(false)
+
+            screen
+                .frame(width: 164, height: 245)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .offset(y: -22)
+                .gesture(isInteractive ? combinedGesture : nil)
         }
-        .frame(width: 220, height: 352)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

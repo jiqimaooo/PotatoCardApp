@@ -33,18 +33,6 @@ final class CircleTransferCoordinator: ObservableObject {
         Task {
             do {
                 let ticket = try await apiClient.transferTicket(postID: post.id, accessToken: accessToken)
-                if let devicePayloadUrl = ticket.devicePayloadUrl {
-                    do {
-                        let payloadData = try await apiClient.downloadDevicePayload(from: devicePayloadUrl)
-                        let transferImage = try PotatoDevicePayloadCodec.decodeImage(from: payloadData)
-                        bleService.transfer(image: transferImage, displayImage: transferImage, to: device)
-                        isPreparingTransfer = false
-                        return
-                    } catch {
-                        // 新帖优先走服务端保存的最终设备数据；如果签名 URL 过期或 payload 损坏，
-                        // 继续回退到旧链路，保证用户仍可传输到土豆片。
-                    }
-                }
                 let image = try await apiClient.downloadTransferImage(from: ticket.downloadUrl)
                 let displayImage = EInkImageRenderer.render(
                     image: image,

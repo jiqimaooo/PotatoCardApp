@@ -209,6 +209,8 @@ struct HealthSkillDetailView: View {
     @State private var isSyncing = false
     @State private var statusMessage: String?
     @State private var hasAttemptedAuthorization = false
+    @State private var isRefreshingData = false
+    @State private var isShowingTransferPreview = false
     // 调试用：当 HealthKit 读不到数据时（模拟器、首次安装），切到示例数据预览，
     // 便于检查 400x600 渲染布局是否合理。打包发版不需要隐藏，本身是个无害的展示开关。
     @State private var showsSampleData = false
@@ -217,6 +219,7 @@ struct HealthSkillDetailView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 previewCard
+                dataSection
                 detailSection
                 authorizationCard
                 syncButton
@@ -233,6 +236,16 @@ struct HealthSkillDetailView: View {
         }
         .navigationTitle("健康看板")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isShowingTransferPreview) {
+            TransferSheetView(
+                sourceImage: previewImage,
+                title: "\(activeSnapshot.mode.title)预览"
+            ) {
+                store.markSynced(mode: activeSnapshot.mode)
+                statusMessage = "已传输\(activeSnapshot.mode.title)到设备"
+            }
+            .environmentObject(bleService)
+        }
         .task {
             if !hasAttemptedAuthorization {
                 hasAttemptedAuthorization = true
@@ -279,21 +292,67 @@ struct HealthSkillDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await refreshHealthData() }
+                } label: {
+                    Label(isRefreshingData ? "读取中" : "刷新数据", systemImage: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background(buttonFillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(primaryTextColor)
+                .disabled(isRefreshingData)
+
+                Button {
+                    isShowingTransferPreview = true
+                } label: {
+                    Label("预览并传输", systemImage: "paperplane.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .frame(maxWidth: .infinity)
     }
 
     private var previewImage: UIImage {
+        let snapshot = activeSnapshot
+        let targetSize = selectedPreviewSize
+        return HealthSkillRenderer.renderDisplayImage(snapshot: snapshot, targetSize: targetSize)
+    }
+
+    private var activeSnapshot: HealthSnapshot {
         if showsSampleData {
-            return HealthSkillRenderer.renderDisplayImage(
-                snapshot: HealthSkillMockData.snapshot(for: store.config.defaultMode),
-                targetSize: CGSize(width: 400, height: 600)
-            )
+            return HealthSkillMockData.snapshot(for: store.config.defaultMode)
         }
         if let snapshot = store.snapshot {
-            return HealthSkillRenderer.renderDisplayImage(snapshot: snapshot, targetSize: CGSize(width: 400, height: 600))
+            return snapshot
         }
-        return HealthSkillRenderer.renderPlaceholder(mode: store.config.defaultMode)
+        return HealthSnapshot(
+            mode: store.config.defaultMode,
+            updatedAt: Date(),
+            sleep: nil,
+            fitness: nil,
+            daily: nil
+        )
+    }
+
+    private var selectedPreviewSize: CGSize {
+        if let selectedDevice {
+            return selectedDevice.profile.pixelSize
+        }
+        if let snapshot = store.config.targetDeviceSnapshot {
+            return snapshot.profile.pixelSize
+        }
+        return CGSize(width: 400, height: 600)
     }
 
     private var loadStateColor: Color {
@@ -382,6 +441,136 @@ struct HealthSkillDetailView: View {
             .padding(.leading, 16)
     }
 
+    private var dataSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: activeSnapshot.mode.systemImage)
+                    .foregroundStyle(Color.accentColor)
+                Text("读取到的数据")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(primaryTextColor)
+                Spacer()
+                Text(activeSnapshot.updatedAt, format: .dateTime.hour().minute())
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(dataRows.enumerated()), id: \.offset) { index, row in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(row.title)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(primaryTextColor)
+                            if !row.subtitle.isEmpty {
+                                Text(row.subtitle)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(secondaryTextColor)
+                            }
+                        }
+                        Spacer()
+                        Text(row.value)
+                            .font(.system(size: 16, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(primaryTextColor)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+
+                    if index < dataRows.count - 1 {
+                        Divider()
+                            .padding(.leading, 14)
+                    }
+                }
+            }
+            .background(buttonFillColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Text(dataFootnote)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(secondaryTextColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(cardFillColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(cardStrokeColor, lineWidth: 1)
+        )
+    }
+
+    private struct DataRow {
+        let title: String
+        let value: String
+        var subtitle = ""
+    }
+
+    private var dataRows: [DataRow] {
+        let snapshot = activeSnapshot
+        switch snapshot.mode {
+        case .sleep:
+            guard let sleep = snapshot.sleep else {
+                return [
+                    DataRow(title: "睡眠数据", value: "—", subtitle: "还没有读到最近一晚记录"),
+                    DataRow(title: "状态", value: loadStateShortText)
+                ]
+            }
+            return [
+                DataRow(title: "在床时长", value: durationText(sleep.inBedDuration), subtitle: "\(timeText(sleep.bedtime)) - \(timeText(sleep.wakeTime))"),
+                DataRow(title: "实际睡眠", value: durationText(sleep.asleepDuration), subtitle: "深睡 \(durationText(sleep.deepDuration)) · REM \(durationText(sleep.remDuration))"),
+                DataRow(title: "睡眠评分", value: "\(sleep.sleepScore)", subtitle: "本地启发式评分"),
+                DataRow(title: "夜间心率", value: optionalNumber(sleep.averageHeartRate, suffix: " bpm"), subtitle: "最低 \(optionalNumber(sleep.minHeartRate, suffix: " bpm"))")
+            ]
+        case .fitness:
+            guard let fitness = snapshot.fitness else {
+                return [
+                    DataRow(title: "健身数据", value: "—", subtitle: "今日活动数据暂不可用"),
+                    DataRow(title: "状态", value: loadStateShortText)
+                ]
+            }
+            return [
+                DataRow(title: "活动能量", value: "\(Int(fitness.activeEnergyKcal.rounded())) kcal", subtitle: goalText(current: fitness.activeEnergyKcal, goal: fitness.activeEnergyGoalKcal, unit: "kcal")),
+                DataRow(title: "运动分钟", value: "\(Int(fitness.exerciseMinutes.rounded())) min", subtitle: goalText(current: fitness.exerciseMinutes, goal: fitness.exerciseGoalMinutes, unit: "min")),
+                DataRow(title: "步数", value: "\(fitness.stepCount)", subtitle: distanceText(fitness.distanceMeters)),
+                DataRow(title: "心率", value: optionalNumber(fitness.averageHeartRate, suffix: " bpm"), subtitle: "静息 \(optionalNumber(fitness.restingHeartRate, suffix: " bpm"))")
+            ]
+        case .daily:
+            guard let daily = snapshot.daily else {
+                return [
+                    DataRow(title: "一日总结", value: "—", subtitle: "还没有读到足够数据"),
+                    DataRow(title: "状态", value: loadStateShortText)
+                ]
+            }
+            return [
+                DataRow(title: "活动能量", value: "\(Int(daily.fitness.activeEnergyKcal.rounded())) kcal", subtitle: "\(daily.fitness.stepCount) 步 · \(distanceText(daily.fitness.distanceMeters))"),
+                DataRow(title: "运动分钟", value: "\(Int(daily.fitness.exerciseMinutes.rounded())) min", subtitle: "\(Int(daily.fitness.standHours.rounded())) 个站立小时"),
+                DataRow(title: "昨晚睡眠", value: daily.sleep.map { durationText($0.inBedDuration) } ?? "—", subtitle: daily.sleep.map { "评分 \($0.sleepScore)" } ?? "未读取到睡眠"),
+                DataRow(title: "身体指标", value: optionalNumber(daily.avgHeartRate, suffix: " bpm"), subtitle: "静息 \(optionalNumber(daily.restingHeartRate, suffix: " bpm"))")
+            ]
+        }
+    }
+
+    private var dataFootnote: String {
+        if showsSampleData {
+            return "当前展示示例数据；关闭示例数据后会使用 HealthKit 读取结果。"
+        }
+        return "这些数据会被渲染成上方预览图，预览并传输时可以继续微调裁切和图像算法。"
+    }
+
+    private var loadStateShortText: String {
+        switch store.loadState {
+        case .idle:
+            return "未刷新"
+        case .missingAuthorization:
+            return "待授权"
+        case .loading:
+            return "读取中"
+        case .loaded:
+            return "已读取"
+        case .failed:
+            return "无数据"
+        }
+    }
+
     private var selectedDevice: BleDevice? {
         let targetID = store.config.targetDeviceID.trimmed
         guard !targetID.isEmpty else { return nil }
@@ -428,6 +617,10 @@ struct HealthSkillDetailView: View {
         colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06)
     }
 
+    private var buttonFillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.04)
+    }
+
     private var authorizationCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -444,7 +637,10 @@ struct HealthSkillDetailView: View {
                 .foregroundStyle(.secondary)
 
             Button {
-                Task { await store.requestAuthorization() }
+                Task {
+                    await store.requestAuthorization()
+                    await refreshHealthData()
+                }
             } label: {
                 Text("重新请求授权")
                     .font(.system(size: 14, weight: .semibold))
@@ -504,6 +700,48 @@ struct HealthSkillDetailView: View {
             }
         }
         isSyncing = false
+    }
+
+    private func refreshHealthData() async {
+        isRefreshingData = true
+        statusMessage = nil
+        await store.refresh(mode: store.config.defaultMode)
+        isRefreshingData = false
+    }
+
+    private func durationText(_ seconds: TimeInterval) -> String {
+        guard seconds > 0 else { return "0m" }
+        let minutes = Int((seconds / 60).rounded())
+        let hours = minutes / 60
+        let mins = minutes % 60
+        if hours > 0 {
+            return "\(hours)h\(mins)m"
+        }
+        return "\(mins)m"
+    }
+
+    private func timeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func optionalNumber(_ value: Double?, suffix: String) -> String {
+        guard let value else { return "—" }
+        return "\(Int(value.rounded()))\(suffix)"
+    }
+
+    private func goalText(current: Double, goal: Double?, unit: String) -> String {
+        guard let goal, goal > 0 else { return "目标未设置" }
+        let percent = min(999, Int((current / goal * 100).rounded()))
+        return "目标 \(Int(goal.rounded())) \(unit) · \(percent)%"
+    }
+
+    private func distanceText(_ meters: Double) -> String {
+        if meters >= 1000 {
+            return String(format: "%.1f km", meters / 1000)
+        }
+        return "\(Int(meters.rounded())) m"
     }
 }
 

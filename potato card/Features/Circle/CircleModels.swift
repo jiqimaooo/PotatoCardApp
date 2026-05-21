@@ -37,9 +37,6 @@ struct CirclePost: Codable, Equatable, Identifiable {
     let colorMode: String?
     let transferCount: Int
     let previewUrl: URL?
-    let originalUrl: URL?
-    let devicePayloadUrl: URL?
-    let payloadMeta: CirclePostPayloadMeta?
     let previewWidth: Int?
     let previewHeight: Int?
     let channel: CirclePostChannel
@@ -56,9 +53,6 @@ struct CirclePost: Codable, Equatable, Identifiable {
         case colorMode
         case transferCount
         case previewUrl
-        case originalUrl
-        case devicePayloadUrl
-        case payloadMeta
         case previewWidth
         case previewHeight
         case channel
@@ -77,30 +71,11 @@ struct CirclePost: Codable, Equatable, Identifiable {
         colorMode = try container.decodeIfPresent(String.self, forKey: .colorMode)
         transferCount = try container.decode(Int.self, forKey: .transferCount)
         previewUrl = try container.decodeIfPresent(URL.self, forKey: .previewUrl)
-        originalUrl = try container.decodeIfPresent(URL.self, forKey: .originalUrl)
-        devicePayloadUrl = try container.decodeIfPresent(URL.self, forKey: .devicePayloadUrl)
-        payloadMeta = try container.decodeIfPresent(CirclePostPayloadMeta.self, forKey: .payloadMeta)
         previewWidth = try container.decodeIfPresent(Int.self, forKey: .previewWidth)
         previewHeight = try container.decodeIfPresent(Int.self, forKey: .previewHeight)
         channel = try container.decodeIfPresent(CirclePostChannel.self, forKey: .channel) ?? .community
         createdAt = try container.decode(Date.self, forKey: .createdAt)
     }
-}
-
-struct CirclePostPayloadMeta: Codable, Equatable {
-    let device: String
-    let width: Int
-    let height: Int
-    let colorMode: String
-    let format: String
-    let checksum: String
-    let size: Int
-}
-
-struct CirclePostUploadPayload {
-    let originalImageData: Data
-    let devicePayloadData: Data
-    let payloadMeta: CirclePostPayloadMeta
 }
 
 struct CircleFeedResponse: Codable {
@@ -119,8 +94,6 @@ struct CircleDriftBottleDrawResponse: Codable {
 
 struct CircleTransferTicket: Codable {
     let downloadUrl: URL
-    let devicePayloadUrl: URL?
-    let payloadMeta: CirclePostPayloadMeta?
     let expiresInSeconds: Int
 }
 
@@ -144,8 +117,6 @@ struct CircleImageToken: Codable, Equatable, Identifiable {
     let destroyedAt: Date?
     let expiresAt: Date?
     let createdAt: Date?
-    let hasDevicePayload: Bool?
-    let payloadMeta: CirclePostPayloadMeta?
 }
 
 struct CircleImageTokenListResponse: Codable {

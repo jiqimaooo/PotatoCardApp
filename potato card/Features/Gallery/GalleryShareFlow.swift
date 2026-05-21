@@ -131,15 +131,15 @@ struct GalleryShareSheet: View {
                 CirclePostComposerView(
                     initialImageData: imageData,
                     allowsPhotoChange: false
-                ) { uploadPayload, title, tags in
-                    Task { await publishCircle(uploadPayload: uploadPayload, title: title, tags: tags) }
+                ) { data, title, tags in
+                    Task { await publishCircle(imageData: data, title: title, tags: tags) }
                 }
             case .driftBottle:
                 CircleDriftBottleThrowComposerView(
                     initialImageData: imageData,
                     allowsPhotoChange: false
-                ) { uploadPayload in
-                    Task { await publishDriftBottle(uploadPayload: uploadPayload) }
+                ) { data in
+                    Task { await publishDriftBottle(imageData: data) }
                 }
             }
         } else {
@@ -151,14 +151,14 @@ struct GalleryShareSheet: View {
     // MARK: - 上传逻辑（与 CircleView 同源；refresh 一次以容忍短期 401）
 
     @MainActor
-    private func publishCircle(uploadPayload: CirclePostUploadPayload, title: String, tags: [String]) async {
+    private func publishCircle(imageData: Data, title: String, tags: [String]) async {
         do {
             let token = try await validAccessToken()
             do {
-                try await sessionAPIClient.createPost(uploadPayload: uploadPayload, title: title, tags: tags, accessToken: token)
+                try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: token)
             } catch CircleAPIError.unauthorized {
                 let refreshed = try await validAccessToken(forceRefresh: true)
-                try await sessionAPIClient.createPost(uploadPayload: uploadPayload, title: title, tags: tags, accessToken: refreshed)
+                try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshed)
             }
             onPublishSucceeded?(destination)
             dismiss()
@@ -168,14 +168,14 @@ struct GalleryShareSheet: View {
     }
 
     @MainActor
-    private func publishDriftBottle(uploadPayload: CirclePostUploadPayload) async {
+    private func publishDriftBottle(imageData: Data) async {
         do {
             let token = try await validAccessToken()
             do {
-                try await sessionAPIClient.createDriftBottle(uploadPayload: uploadPayload, accessToken: token)
+                try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: token)
             } catch CircleAPIError.unauthorized {
                 let refreshed = try await validAccessToken(forceRefresh: true)
-                try await sessionAPIClient.createDriftBottle(uploadPayload: uploadPayload, accessToken: refreshed)
+                try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: refreshed)
             }
             onPublishSucceeded?(destination)
             dismiss()

@@ -7,6 +7,7 @@ struct SkillsHomeView: View {
     @EnvironmentObject private var bleService: BleTransferService
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var weatherStore = WeatherSkillStore()
+    @StateObject private var healthStore = HealthSkillStore()
     @State private var activeSyncContext: WeatherSkillSyncContext?
     @State private var didHandleActiveSyncSuccess = false
     @State private var showsWeatherSampleData = false
@@ -19,14 +20,9 @@ struct SkillsHomeView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 18) {
                 header
-                weatherSkillCard
-                healthSkillSection
-                todoSkillCard
-                albumSkillCard
-                aiImageSkillCard
-                weReadSkillCard
+                skillsListSection
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
@@ -62,6 +58,185 @@ struct SkillsHomeView: View {
                 .foregroundStyle(secondaryTextColor)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var skillsListSection: some View {
+        VStack(spacing: 10) {
+            skillNavigationRow(
+                title: "天气看板",
+                subtitle: showsWeatherSampleData ? weatherSampleSnapshot.summaryText : weatherStore.skill.previewSummary,
+                status: compactMetaText
+            ) {
+                weatherIcon
+            } destination: {
+                WeatherSkillDetailView(
+                    store: weatherStore,
+                    sampleSnapshot: weatherSampleSnapshot,
+                    showsSampleData: $showsWeatherSampleData,
+                    onRefreshSampleData: {
+                        weatherSampleSnapshot = WeatherSkillMockData.snapshot()
+                    },
+                    onSyncRequested: {
+                        startWeatherSync()
+                    },
+                    isSyncing: isWeatherSyncing,
+                    syncProgress: bleService.transferProgress
+                )
+                .environmentObject(bleService)
+            }
+
+            skillNavigationRow(
+                title: "健康看板",
+                subtitle: healthStore.skill.previewSummary,
+                status: "\(healthStore.config.defaultMode.title) · 400 x 600"
+            ) {
+                healthIcon
+            } destination: {
+                HealthSkillDetailView(store: healthStore)
+                    .environmentObject(bleService)
+            }
+
+            skillNavigationRow(
+                title: "待办",
+                subtitle: "把今日事项同步到土豆片",
+                status: "清单管理 · 墨水屏展示"
+            ) {
+                todoIcon
+            } destination: {
+                TodoView()
+            }
+
+            skillNavigationRow(
+                title: "专辑",
+                subtitle: "把喜欢的专辑封面推到土豆片",
+                status: "\(AlbumCatalog.allAlbums.count) 张封面 · 周杰伦 / 孙燕姿"
+            ) {
+                albumIcon
+            } destination: {
+                AlbumSkillDetailView(onTransferToDevice: onAlbumTransferToDevice)
+                    .environmentObject(bleService)
+            }
+
+            skillNavigationRow(
+                title: "AI 生图",
+                subtitle: "快捷指令生成土豆片图片",
+                status: "文字生成 · 适配土豆片屏幕"
+            ) {
+                aiImageIcon
+            } destination: {
+                AISkillConfigView()
+            }
+
+            skillNavigationRow(
+                title: "微信读书",
+                subtitle: hasWeReadAPIKey ? "已保存 Key，可直接读取微信读书数据" : "一键跳转领 Key，回到 App 直接接入",
+                status: hasWeReadAPIKey ? "每日划线 · 阅读月报" : "官方 Skill 网关 · 本机 Keychain 保存"
+            ) {
+                WeReadOfficialIcon(size: 44, cornerRadius: 12)
+            } destination: {
+                WeReadSkillSetupView()
+            }
+        }
+    }
+
+    private func skillNavigationRow<Icon: View, Destination: View>(
+        title: String,
+        subtitle: String,
+        status: String,
+        @ViewBuilder icon: () -> Icon,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            HStack(spacing: 14) {
+                icon()
+                    .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(primaryTextColor)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(secondaryTextColor)
+                        .lineLimit(1)
+
+                    Text(status)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(primaryTextColor.opacity(0.54))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(secondaryTextColor.opacity(0.72))
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 82)
+            .background(cardFillColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(cardStrokeColor, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var weatherIcon: some View {
+        skillIconBackground(
+            colors: [Color(red: 0.20, green: 0.64, blue: 0.98), Color(red: 0.98, green: 0.71, blue: 0.16)],
+            systemName: "cloud.sun.fill"
+        )
+    }
+
+    private var healthIcon: some View {
+        skillIconBackground(
+            colors: [Color(red: 0.95, green: 0.30, blue: 0.40), Color(red: 0.98, green: 0.62, blue: 0.18)],
+            systemName: "heart.text.square"
+        )
+    }
+
+    private var todoIcon: some View {
+        skillIconBackground(
+            colors: [Color(red: 0.18, green: 0.72, blue: 0.54), Color(red: 0.18, green: 0.49, blue: 0.98)],
+            systemName: "checklist"
+        )
+    }
+
+    private var albumIcon: some View {
+        skillIconBackground(
+            colors: [Color(red: 0.96, green: 0.31, blue: 0.45), Color(red: 0.38, green: 0.20, blue: 0.86)],
+            systemName: "music.note.list"
+        )
+    }
+
+    private var aiImageIcon: some View {
+        skillIconBackground(
+            colors: [Color(red: 0.30, green: 0.48, blue: 1.00), Color(red: 0.75, green: 0.34, blue: 0.98)],
+            systemName: "sparkles"
+        )
+    }
+
+    private func skillIconBackground(colors: [Color], systemName: String) -> some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                Image(systemName: systemName)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+            )
+            .frame(width: 44, height: 44)
     }
 
     private var weatherSkillCard: some View {
@@ -424,23 +599,7 @@ struct SkillsHomeView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .center, spacing: 10) {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.10, green: 0.63, blue: 0.48),
-                                    Color(red: 0.18, green: 0.49, blue: 0.98)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 42, height: 42)
-                        .overlay(
-                            Image(systemName: "books.vertical.fill")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.white)
-                        )
+                    WeReadOfficialIcon(size: 42, cornerRadius: 12)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text("微信读书")

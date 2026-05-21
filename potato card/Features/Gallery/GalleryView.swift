@@ -903,7 +903,8 @@ struct GalleryImageViewer: View {
         ZStack {
             // 始终是一棵 TabView：expanded ↔ collapsed 切换时不再 swap view tree，
             // 只是给「当前选中那张」的 photo screen 切手势开关。这样 SwiftUI 不会
-            // 在 detent 变化时给图片做位移动画。
+            // 在 detent 变化时给图片做位移动画（之前看到的「从左上向右下划」就是
+            // editableScreen 与 TabView 两个不同 view tree 的 cross-fade 引起的）。
             // 全屏时禁用 TabView 翻页手势，避免编辑用的拖动跟翻页冲突。
             TabView(selection: $selectedIndex) {
                 ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
