@@ -165,13 +165,13 @@ struct CircleView: View {
             showToast(message, style: .error)
         }
         .sheet(isPresented: $isComposerPresented) {
-            CirclePostComposerView { imageData, title, tags in
-                publish(imageData: imageData, title: title, tags: tags)
+            CirclePostComposerView { uploadPayload, title, tags in
+                publish(uploadPayload: uploadPayload, title: title, tags: tags)
             }
         }
         .sheet(isPresented: $isDriftBottleThrowPresented) {
-            CircleDriftBottleThrowComposerView { imageData in
-                publishDriftBottle(imageData: imageData)
+            CircleDriftBottleThrowComposerView { uploadPayload in
+                publishDriftBottle(uploadPayload: uploadPayload)
             }
         }
         .sheet(item: $circleImageViewerRequest) { request in
@@ -189,7 +189,7 @@ struct CircleView: View {
                 },
                 isContentLocked: true,
                 lockedPreviewText: request.lockedPreviewText,
-                transferButtonTitle: "传输到设备解锁原图"
+                transferButtonTitle: "传输到设备查看图片"
             )
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
@@ -662,11 +662,11 @@ struct CircleView: View {
         }
     }
 
-    private func publish(imageData: Data, title: String, tags: [String]) {
-        showPublishStatus(.posting)
+    private func publish(uploadPayload: CirclePostUploadPayload, title: String, tags: [String]) {
+        showPublishStatus(.uploading)
         Task {
             do {
-                try await createPostWithRefresh(imageData: imageData, title: title, tags: tags)
+                try await createPostWithRefresh(uploadPayload: uploadPayload, title: title, tags: tags)
                 showPublishStatus(.succeeded)
                 do {
                     let page = try await fetchPostsWithRefresh(cursor: nil)
@@ -687,11 +687,11 @@ struct CircleView: View {
         }
     }
 
-    private func publishDriftBottle(imageData: Data) {
+    private func publishDriftBottle(uploadPayload: CirclePostUploadPayload) {
         showPublishStatus(.posting)
         Task {
             do {
-                try await createDriftBottleWithRefresh(imageData: imageData)
+                try await createDriftBottleWithRefresh(uploadPayload: uploadPayload)
                 showPublishStatus(.succeeded)
                 showToast("漂流瓶已扔进海里", style: .success)
                 hidePublishStatus(after: 2)
@@ -737,23 +737,23 @@ struct CircleView: View {
         posts.append(contentsOf: pagePosts.filter { !existingIDs.contains($0.id) })
     }
 
-    private func createPostWithRefresh(imageData: Data, title: String, tags: [String]) async throws {
+    private func createPostWithRefresh(uploadPayload: CirclePostUploadPayload, title: String, tags: [String]) async throws {
         let accessToken = try await validAccessToken()
         do {
-            try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: accessToken)
+            try await sessionAPIClient.createPost(uploadPayload: uploadPayload, title: title, tags: tags, accessToken: accessToken)
         } catch CircleAPIError.unauthorized {
             let refreshedToken = try await validAccessToken(forceRefresh: true)
-            try await sessionAPIClient.createPost(imageData: imageData, title: title, tags: tags, accessToken: refreshedToken)
+            try await sessionAPIClient.createPost(uploadPayload: uploadPayload, title: title, tags: tags, accessToken: refreshedToken)
         }
     }
 
-    private func createDriftBottleWithRefresh(imageData: Data) async throws {
+    private func createDriftBottleWithRefresh(uploadPayload: CirclePostUploadPayload) async throws {
         let accessToken = try await validAccessToken()
         do {
-            try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: accessToken)
+            try await sessionAPIClient.createDriftBottle(uploadPayload: uploadPayload, accessToken: accessToken)
         } catch CircleAPIError.unauthorized {
             let refreshedToken = try await validAccessToken(forceRefresh: true)
-            try await sessionAPIClient.createDriftBottle(imageData: imageData, accessToken: refreshedToken)
+            try await sessionAPIClient.createDriftBottle(uploadPayload: uploadPayload, accessToken: refreshedToken)
         }
     }
 
@@ -967,6 +967,9 @@ private struct CircleImageTokenTransferView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var selectedImage: UIImage?
     @State private var selectedImageData: Data?
+    @State private var imageEditorSourceImage: UIImage?
+    @State private var imageEditorOriginalData: Data?
+    @State private var isImageEditorPresented = false
     @State private var customTokenCode = ""
     @State private var isBurnAfterRead = true
     @State private var expiresInHours = 24
@@ -1009,6 +1012,21 @@ private struct CircleImageTokenTransferView: View {
         }
         .onChange(of: bleService.transferPhase) { phase in
             handleTransferPhaseChange(phase)
+        }
+        .sheet(isPresented: $isImageEditorPresented) {
+            if let imageEditorSourceImage, let imageEditorOriginalData {
+                CirclePostImageEditorView(
+                    sourceImage: imageEditorSourceImage,
+                    originalImageData: imageEditorOriginalData,
+                    footerText: "生成口令前将同时生成土豆片专用显示数据",
+                    confirmButtonTitle: "确认生成"
+                ) { uploadPayload in
+                    createToken(uploadPayload: uploadPayload)
+                }
+            } else {
+                ProgressView("正在读取照片…")
+                    .presentationDetents([.height(220)])
+            }
         }
     }
 
@@ -1068,7 +1086,7 @@ private struct CircleImageTokenTransferView: View {
             }
 
             Button {
-                createToken()
+                prepareTokenImageEditor()
             } label: {
                 HStack(spacing: 8) {
                     if isCreating {
@@ -1361,14 +1379,23 @@ private struct CircleImageTokenTransferView: View {
         }
     }
 
-    private func createToken() {
-        guard let selectedImageData else { return }
+    private func prepareTokenImageEditor() {
+        guard let selectedImageData, let image = UIImage(data: selectedImageData) else {
+            onToast("图片读取失败", .error)
+            return
+        }
+        imageEditorSourceImage = image
+        imageEditorOriginalData = selectedImageData
+        isImageEditorPresented = true
+    }
+
+    private func createToken(uploadPayload: CirclePostUploadPayload) {
         isCreating = true
         Task {
             do {
                 let token = try await performAuthenticated { accessToken in
                     try await apiClient.createImageToken(
-                        imageData: selectedImageData,
+                        uploadPayload: uploadPayload,
                         tokenCode: customTokenCode,
                         isBurnAfterRead: isBurnAfterRead,
                         expiresInHours: expiresInHours,
@@ -1443,23 +1470,26 @@ private struct CircleImageTokenTransferView: View {
         isPreparingTokenTransfer = true
         Task {
             do {
-                let image = try await performAuthenticated { accessToken in
-                    try await apiClient.downloadImageTokenTransferImage(id: token.id, accessToken: accessToken)
+                let transferImage: UIImage
+                let displayImage: UIImage
+                if token.hasDevicePayload == true {
+                    do {
+                        let payloadData = try await performAuthenticated { accessToken in
+                            try await apiClient.downloadImageTokenTransferPayload(id: token.id, accessToken: accessToken)
+                        }
+                        let payloadImage = try PotatoDevicePayloadCodec.decodeImage(from: payloadData)
+                        transferImage = payloadImage
+                        displayImage = payloadImage
+                    } catch {
+                        let fallbackImage = try await downloadTokenTransferImage(token)
+                        transferImage = renderTokenTransferImage(fallbackImage, device: device)
+                        displayImage = renderTokenDisplayImage(fallbackImage, device: device)
+                    }
+                } else {
+                    let fallbackImage = try await downloadTokenTransferImage(token)
+                    transferImage = renderTokenTransferImage(fallbackImage, device: device)
+                    displayImage = renderTokenDisplayImage(fallbackImage, device: device)
                 }
-                let displayImage = EInkImageRenderer.render(
-                    image: image,
-                    targetSize: device.profile.pixelSize,
-                    fitMode: .centerCrop,
-                    adjustment: .default
-                )
-                let transferImage = EInkImageRenderer.renderForTransfer(
-                    image: image,
-                    targetSize: device.profile.pixelSize,
-                    fitMode: .centerCrop,
-                    adjustment: .default,
-                    profile: device.profile,
-                    ditherAlgorithm: bleService.ditherAlgorithm
-                )
                 await MainActor.run {
                     bleService.transfer(image: transferImage, displayImage: displayImage, to: device)
                 }
@@ -1473,6 +1503,32 @@ private struct CircleImageTokenTransferView: View {
                 isPreparingTokenTransfer = false
             }
         }
+    }
+
+    private func downloadTokenTransferImage(_ token: CircleImageToken) async throws -> UIImage {
+        try await performAuthenticated { accessToken in
+            try await apiClient.downloadImageTokenTransferImage(id: token.id, accessToken: accessToken)
+        }
+    }
+
+    private func renderTokenDisplayImage(_ image: UIImage, device: BleDevice) -> UIImage {
+        EInkImageRenderer.render(
+            image: image,
+            targetSize: device.profile.pixelSize,
+            fitMode: .centerCrop,
+            adjustment: .default
+        )
+    }
+
+    private func renderTokenTransferImage(_ image: UIImage, device: BleDevice) -> UIImage {
+        EInkImageRenderer.renderForTransfer(
+            image: image,
+            targetSize: device.profile.pixelSize,
+            fitMode: .centerCrop,
+            adjustment: .default,
+            profile: device.profile,
+            ditherAlgorithm: bleService.ditherAlgorithm
+        )
     }
 
     private func handleTransferPhaseChange(_ phase: TransferPhase) {
@@ -1766,6 +1822,7 @@ private struct CircleFeedTopLoadingView: View {
 private struct CirclePublishStatusToast: View {
     enum StateStyle: Equatable {
         case posting
+        case uploading
         case succeeded
         case failed(String)
     }
@@ -1830,6 +1887,8 @@ private struct CirclePublishStatusToast: View {
         switch state {
         case .posting:
             return "正在发布作品"
+        case .uploading:
+            return "正在上传…"
         case .succeeded:
             return "发布成功"
         case .failed:
@@ -1840,7 +1899,9 @@ private struct CirclePublishStatusToast: View {
     private var subtitle: String {
         switch state {
         case .posting:
-            return "照片正在上传，请稍等"
+            return "正在处理图片和发布信息"
+        case .uploading:
+            return "展示图和土豆片数据正在上传"
         case .succeeded:
             return "已提交到圈子，列表将自动更新"
         case .failed(let message):
@@ -1852,6 +1913,8 @@ private struct CirclePublishStatusToast: View {
         switch state {
         case .posting:
             return 0.42
+        case .uploading:
+            return 0.72
         case .succeeded:
             return 1
         case .failed:
@@ -1860,13 +1923,15 @@ private struct CirclePublishStatusToast: View {
     }
 
     private var showsSpinner: Bool {
-        state == .posting
+        state == .posting || state == .uploading
     }
 
     private var iconName: String {
         switch state {
         case .posting:
             return "arrow.up.circle.fill"
+        case .uploading:
+            return "icloud.and.arrow.up.fill"
         case .succeeded:
             return "checkmark.circle.fill"
         case .failed:
@@ -1876,7 +1941,7 @@ private struct CirclePublishStatusToast: View {
 
     private var tint: Color {
         switch state {
-        case .posting:
+        case .posting, .uploading:
             return Color(red: 0.86, green: 0.16, blue: 0.22)
         case .succeeded:
             return .green
